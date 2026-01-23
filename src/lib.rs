@@ -1,4 +1,4 @@
-#![no_std]
+#![cfg_attr(not(feature = "database"), no_std)]
 use soroban_sdk::{contract, contractimpl, contracttype, contracterror, Address, Env, Symbol, String};
 
 // Database module requires std and specific dependencies

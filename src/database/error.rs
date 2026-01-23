@@ -1,5 +1,3 @@
-use sqlx::postgres::PgDatabaseError;
-use sqlx::error::DatabaseError as SqlxDatabaseError;
 use std::fmt;
 
 /// Custom database error type for Aframp
@@ -119,34 +117,29 @@ impl DatabaseError {
                 })
             }
             sqlx::Error::Configuration(msg) => {
-                Self::new(DatabaseErrorKind::ConfigError { message: msg })
+                Self::new(DatabaseErrorKind::ConfigError { message: msg.to_string() })
             }
             sqlx::Error::Database(db_err) => {
-                // Handle PostgreSQL-specific errors
-                if let Some(pg_err) = db_err.downcast_ref::<PgDatabaseError>() {
-                    match pg_err.code() {
-                        "23505" => {
-                            // Unique constraint violation
-                            Self::new(DatabaseErrorKind::UniqueConstraintViolation {
-                                column: pg_err.column().unwrap_or("unknown").to_string(),
-                                value: "provided value".to_string(),
-                            })
-                        }
-                        "23503" => {
-                            // Foreign key constraint violation
-                            Self::new(DatabaseErrorKind::ForeignKeyViolation {
-                                table: pg_err.table().unwrap_or("unknown").to_string(),
-                                column: pg_err.column().unwrap_or("unknown").to_string(),
-                            })
-                        }
-                        _ => Self::new(DatabaseErrorKind::QueryError {
-                            message: pg_err.message().to_string(),
-                        }),
+                // Handle database-specific errors using trait methods
+                let code = db_err.code();
+                match code.as_deref() {
+                    Some("23505") => {
+                        // Unique constraint violation (Postgres code)
+                        Self::new(DatabaseErrorKind::UniqueConstraintViolation {
+                            column: "unknown".to_string(),
+                            value: "provided value".to_string(),
+                        })
                     }
-                } else {
-                    Self::new(DatabaseErrorKind::QueryError {
+                    Some("23503") => {
+                        // Foreign key constraint violation (Postgres code)
+                        Self::new(DatabaseErrorKind::ForeignKeyViolation {
+                            table: "unknown".to_string(),
+                            column: "unknown".to_string(),
+                        })
+                    }
+                    _ => Self::new(DatabaseErrorKind::QueryError {
                         message: db_err.message().to_string(),
-                    })
+                    }),
                 }
             }
             sqlx::Error::Io(io_err) => {

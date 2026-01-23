@@ -9,6 +9,8 @@ pub mod transaction_repository;
 pub mod exchange_rate_repository;
 pub mod webhook_repository;
 pub mod trustline_repository;
+pub mod payment_repository;
+pub mod bill_payment_repository;
 
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -97,8 +99,8 @@ pub struct PoolStats {
 
 pub fn get_pool_stats(pool: &PgPool) -> PoolStats {
     PoolStats {
-        num_idle: pool.num_idle(),
-        size: pool.size(),
+        num_idle: pool.num_idle() as u32,
+        size: pool.size() as u32,
     }
 }
 

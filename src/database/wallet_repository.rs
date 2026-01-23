@@ -66,7 +66,7 @@ impl WalletRepository {
         .await
         .map_err(|e| {
             if matches!(e, sqlx::Error::RowNotFound) {
-                DatabaseError::new(DatabaseError::NotFound {
+                DatabaseError::new(DatabaseErrorKind::NotFound {
                     entity: "Wallet".to_string(),
                     id: wallet_id.to_string(),
                 })
