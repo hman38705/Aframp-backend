@@ -4,6 +4,11 @@ use async_trait::async_trait;
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
+#[cfg(feature = "cache")]
+use crate::cache::{cache::Cache, keys::exchange_rate::CurrencyPairKey, RedisCache};
+#[cfg(feature = "cache")]
+use tracing::debug;
+
 /// Exchange Rate entity
 #[derive(Debug, Clone, FromRow)]
 pub struct ExchangeRate {
@@ -19,30 +24,79 @@ pub struct ExchangeRate {
 /// Exchange Rate Repository for rate lookups and historical data
 pub struct ExchangeRateRepository {
     pool: PgPool,
+    #[cfg(feature = "cache")]
+    cache: Option<RedisCache>,
 }
 
 impl ExchangeRateRepository {
+    /// Create a new repository without caching
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            #[cfg(feature = "cache")]
+            cache: None,
+        }
+    }
+
+    /// Create a new repository with Redis caching enabled
+    #[cfg(feature = "cache")]
+    pub fn with_cache(pool: PgPool, cache: RedisCache) -> Self {
+        Self {
+            pool,
+            cache: Some(cache),
+        }
+    }
+
+    /// Enable caching for an existing repository
+    #[cfg(feature = "cache")]
+    pub fn enable_cache(&mut self, cache: RedisCache) {
+        self.cache = Some(cache);
     }
 
     /// Get current exchange rate between two currencies
+    /// Checks cache first, falls back to database, and caches the result
     pub async fn get_current_rate(
         &self,
         from_currency: &str,
         to_currency: &str,
     ) -> Result<Option<ExchangeRate>, DatabaseError> {
-        sqlx::query_as::<_, ExchangeRate>(
-            "SELECT id, from_currency, to_currency, rate, source, created_at, updated_at 
-             FROM exchange_rates 
-             WHERE from_currency = $1 AND to_currency = $2 
+        let cache_key = CurrencyPairKey::new(from_currency, to_currency);
+
+        // Try cache first
+        #[cfg(feature = "cache")]
+        if let Some(ref cache) = self.cache {
+            if let Ok(Some(cached_rate)) = cache.get(&cache_key.to_string()).await {
+                debug!("Cache hit for exchange rate: {} -> {}", from_currency, to_currency);
+                return Ok(Some(cached_rate));
+            }
+        }
+
+        // Cache miss or no cache - query database
+        let rate = sqlx::query_as::<_, ExchangeRate>(
+            "SELECT id, from_currency, to_currency, rate, source, created_at, updated_at
+             FROM exchange_rates
+             WHERE from_currency = $1 AND to_currency = $2
              ORDER BY created_at DESC LIMIT 1",
         )
         .bind(from_currency)
         .bind(to_currency)
         .fetch_optional(&self.pool)
         .await
-        .map_err(DatabaseError::from_sqlx)
+        .map_err(DatabaseError::from_sqlx)?;
+
+        // Cache the result if found
+        #[cfg(feature = "cache")]
+        if let (Some(ref cache), Some(ref rate_result)) = (&self.cache, &rate) {
+            let ttl = crate::cache::cache::ttl::EXCHANGE_RATES;
+            if let Err(e) = cache.set(&cache_key.to_string(), rate_result, Some(ttl)).await {
+                debug!("Failed to cache exchange rate: {}", e);
+                // Don't fail the operation if caching fails
+            } else {
+                debug!("Cached exchange rate: {} -> {}", from_currency, to_currency);
+            }
+        }
+
+        Ok(rate)
     }
 
     /// Get historical rates between two currencies
@@ -67,6 +121,7 @@ impl ExchangeRateRepository {
     }
 
     /// Create or update exchange rate
+    /// Invalidates cache for the affected currency pair
     pub async fn upsert_rate(
         &self,
         from_currency: &str,
@@ -76,10 +131,10 @@ impl ExchangeRateRepository {
     ) -> Result<ExchangeRate, DatabaseError> {
         let rate_id = Uuid::new_v4().to_string();
 
-        sqlx::query_as::<_, ExchangeRate>(
-            "INSERT INTO exchange_rates (id, from_currency, to_currency, rate, source, created_at, updated_at) 
-             VALUES ($1, $2, $3, $4, $5, NOW(), NOW()) 
-             ON CONFLICT (from_currency, to_currency) 
+        let result = sqlx::query_as::<_, ExchangeRate>(
+            "INSERT INTO exchange_rates (id, from_currency, to_currency, rate, source, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+             ON CONFLICT (from_currency, to_currency)
              DO UPDATE SET rate = $4, source = $5, updated_at = NOW()
              RETURNING id, from_currency, to_currency, rate, source, created_at, updated_at",
         )
@@ -90,7 +145,21 @@ impl ExchangeRateRepository {
         .bind(source)
         .fetch_one(&self.pool)
         .await
-        .map_err(DatabaseError::from_sqlx)
+        .map_err(DatabaseError::from_sqlx)?;
+
+        // Invalidate cache for this currency pair
+        #[cfg(feature = "cache")]
+        if let Some(ref cache) = self.cache {
+            let cache_key = CurrencyPairKey::new(from_currency, to_currency);
+            if let Err(e) = cache.delete(&cache_key.to_string()).await {
+                debug!("Failed to invalidate cache for exchange rate: {}", e);
+                // Don't fail the operation if cache invalidation fails
+            } else {
+                debug!("Invalidated cache for exchange rate: {} -> {}", from_currency, to_currency);
+            }
+        }
+
+        Ok(result)
     }
 
     /// Get rates expiring soon (older than specified duration)

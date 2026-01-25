@@ -27,6 +27,10 @@ pub mod logging;
 #[cfg(feature = "database")]
 pub mod middleware;
 
+// Cache layer
+#[cfg(feature = "cache")]
+pub mod cache;
+
 // Contract error enum for Soroban (only when not using database feature)
 #[cfg(not(feature = "database"))]
 #[contracterror]

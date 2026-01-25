@@ -4,6 +4,11 @@ use async_trait::async_trait;
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
+#[cfg(feature = "cache")]
+use crate::cache::{cache::Cache, keys::wallet::TrustlineKey, RedisCache};
+#[cfg(feature = "cache")]
+use tracing::debug;
+
 /// Trustline entity for AFRI trustline tracking
 #[derive(Debug, Clone, FromRow)]
 pub struct Trustline {
@@ -21,29 +26,81 @@ pub struct Trustline {
 /// Trustline Repository for AFRI trustline operations tracking
 pub struct TrustlineRepository {
     pool: PgPool,
+    #[cfg(feature = "cache")]
+    cache: Option<RedisCache>,
 }
 
 impl TrustlineRepository {
+    /// Create a new repository without caching
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            #[cfg(feature = "cache")]
+            cache: None,
+        }
+    }
+
+    /// Create a new repository with Redis caching enabled
+    #[cfg(feature = "cache")]
+    pub fn with_cache(pool: PgPool, cache: RedisCache) -> Self {
+        Self {
+            pool,
+            cache: Some(cache),
+        }
+    }
+
+    /// Enable caching for an existing repository
+    #[cfg(feature = "cache")]
+    pub fn enable_cache(&mut self, cache: RedisCache) {
+        self.cache = Some(cache);
     }
 
     /// Find trustline by account and asset
+    /// Caches trustline existence for performance
     pub async fn find_trustline(
         &self,
         account: &str,
         asset_code: &str,
     ) -> Result<Option<Trustline>, DatabaseError> {
-        sqlx::query_as::<_, Trustline>(
-            "SELECT id, account, asset_code, balance, limit, issuer, status, created_at, updated_at 
-             FROM trustlines 
+        // For AFRI trustlines, we cache whether the trustline exists and is active
+        #[cfg(feature = "cache")]
+        if let Some(ref cache) = self.cache {
+            let trustline_key = TrustlineKey::new(account);
+            if let Ok(Some(cached_exists)) = cache.get::<bool>(&trustline_key.to_string()).await {
+                if !cached_exists {
+                    debug!("Cache hit: no trustline for account {}", account);
+                    return Ok(None);
+                }
+                // If cache says it exists, we still need to fetch full data
+                // This is a compromise for the common case where we just check existence
+            }
+        }
+
+        let trustline = sqlx::query_as::<_, Trustline>(
+            "SELECT id, account, asset_code, balance, limit, issuer, status, created_at, updated_at
+             FROM trustlines
              WHERE account = $1 AND asset_code = $2",
         )
         .bind(account)
         .bind(asset_code)
         .fetch_optional(&self.pool)
         .await
-        .map_err(DatabaseError::from_sqlx)
+        .map_err(DatabaseError::from_sqlx)?;
+
+        // Cache whether trustline exists (for existence checks)
+        #[cfg(feature = "cache")]
+        if let Some(ref cache) = &self.cache {
+            let trustline_key = TrustlineKey::new(account);
+            let exists = trustline.is_some();
+            let ttl = crate::cache::cache::ttl::TRUSTLINES;
+            if let Err(e) = cache.set(&trustline_key.to_string(), &exists, Some(ttl)).await {
+                debug!("Failed to cache trustline existence: {}", e);
+            } else {
+                debug!("Cached trustline existence for account: {} ({})", account, exists);
+            }
+        }
+
+        Ok(trustline)
     }
 
     /// Find all trustlines for an account
@@ -61,6 +118,7 @@ impl TrustlineRepository {
     }
 
     /// Create a new trustline
+    /// Immediately caches positive trustline existence result
     pub async fn create_trustline(
         &self,
         account: &str,
@@ -70,9 +128,9 @@ impl TrustlineRepository {
     ) -> Result<Trustline, DatabaseError> {
         let trustline_id = Uuid::new_v4().to_string();
 
-        sqlx::query_as::<_, Trustline>(
-            "INSERT INTO trustlines (id, account, asset_code, balance, limit, issuer, status, created_at, updated_at) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW()) 
+        let trustline = sqlx::query_as::<_, Trustline>(
+            "INSERT INTO trustlines (id, account, asset_code, balance, limit, issuer, status, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
              RETURNING id, account, asset_code, balance, limit, issuer, status, created_at, updated_at",
         )
         .bind(&trustline_id)
@@ -84,7 +142,21 @@ impl TrustlineRepository {
         .bind("pending")
         .fetch_one(&self.pool)
         .await
-        .map_err(DatabaseError::from_sqlx)
+        .map_err(DatabaseError::from_sqlx)?;
+
+        // Immediately cache that trustline exists for this account
+        #[cfg(feature = "cache")]
+        if let Some(ref cache) = self.cache {
+            let trustline_key = TrustlineKey::new(account);
+            let ttl = crate::cache::cache::ttl::TRUSTLINES;
+            if let Err(e) = cache.set(&trustline_key.to_string(), &true, Some(ttl)).await {
+                debug!("Failed to cache trustline creation: {}", e);
+            } else {
+                debug!("Cached trustline creation for account: {}", account);
+            }
+        }
+
+        Ok(trustline)
     }
 
     /// Update trustline balance

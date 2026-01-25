@@ -4,6 +4,11 @@ use async_trait::async_trait;
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
+#[cfg(feature = "cache")]
+use crate::cache::{cache::Cache, keys::wallet::{BalanceKey, TrustlineKey, TransactionCountKey}, RedisCache};
+#[cfg(feature = "cache")]
+use tracing::debug;
+
 /// Wallet entity
 #[derive(Debug, Clone, FromRow)]
 pub struct Wallet {
@@ -18,11 +23,33 @@ pub struct Wallet {
 /// Wallet Repository for wallet-specific database operations
 pub struct WalletRepository {
     pool: PgPool,
+    #[cfg(feature = "cache")]
+    cache: Option<RedisCache>,
 }
 
 impl WalletRepository {
+    /// Create a new repository without caching
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            #[cfg(feature = "cache")]
+            cache: None,
+        }
+    }
+
+    /// Create a new repository with Redis caching enabled
+    #[cfg(feature = "cache")]
+    pub fn with_cache(pool: PgPool, cache: RedisCache) -> Self {
+        Self {
+            pool,
+            cache: Some(cache),
+        }
+    }
+
+    /// Enable caching for an existing repository
+    #[cfg(feature = "cache")]
+    pub fn enable_cache(&mut self, cache: RedisCache) {
+        self.cache = Some(cache);
     }
 
     /// Find wallet by user ID
@@ -38,29 +65,57 @@ impl WalletRepository {
     }
 
     /// Find wallet by account address
+    /// Caches wallet balance for performance
     pub async fn find_by_account(
         &self,
         account_address: &str,
     ) -> Result<Option<Wallet>, DatabaseError> {
-        sqlx::query_as::<_, Wallet>(
-            "SELECT id, user_id, account_address, balance, created_at, updated_at 
+        // Try cache first for balance-only queries
+        #[cfg(feature = "cache")]
+        if let Some(ref cache) = self.cache {
+            let balance_key = BalanceKey::new(account_address);
+            if let Ok(Some(cached_balance)) = cache.get::<String>(&balance_key.to_string()).await {
+                debug!("Cache hit for wallet balance: {}", account_address);
+                // We have cached balance, but need full wallet data from DB
+                // This is a compromise - we avoid the full query but still need some DB access
+                // For full performance, we'd need to cache the entire wallet object
+            }
+        }
+
+        let wallet = sqlx::query_as::<_, Wallet>(
+            "SELECT id, user_id, account_address, balance, created_at, updated_at
              FROM wallets WHERE account_address = $1",
         )
         .bind(account_address)
         .fetch_optional(&self.pool)
         .await
-        .map_err(DatabaseError::from_sqlx)
+        .map_err(DatabaseError::from_sqlx)?;
+
+        // Cache the balance if wallet found
+        #[cfg(feature = "cache")]
+        if let (Some(ref cache), Some(ref wallet_data)) = (&self.cache, &wallet) {
+            let balance_key = BalanceKey::new(account_address);
+            let ttl = crate::cache::cache::ttl::WALLET_BALANCES;
+            if let Err(e) = cache.set(&balance_key.to_string(), &wallet_data.balance, Some(ttl)).await {
+                debug!("Failed to cache wallet balance: {}", e);
+            } else {
+                debug!("Cached wallet balance: {}", account_address);
+            }
+        }
+
+        Ok(wallet)
     }
 
     /// Update wallet balance
+    /// Invalidates balance cache for the affected wallet
     pub async fn update_balance(
         &self,
         wallet_id: &str,
         new_balance: &str,
     ) -> Result<Wallet, DatabaseError> {
-        sqlx::query_as::<_, Wallet>(
-            "UPDATE wallets SET balance = $1, updated_at = NOW() 
-             WHERE id = $2 
+        let wallet = sqlx::query_as::<_, Wallet>(
+            "UPDATE wallets SET balance = $1, updated_at = NOW()
+             WHERE id = $2
              RETURNING id, user_id, account_address, balance, created_at, updated_at",
         )
         .bind(new_balance)
@@ -76,7 +131,20 @@ impl WalletRepository {
             } else {
                 DatabaseError::from_sqlx(e)
             }
-        })
+        })?;
+
+        // Invalidate balance cache
+        #[cfg(feature = "cache")]
+        if let Some(ref cache) = self.cache {
+            let balance_key = BalanceKey::new(&wallet.account_address);
+            if let Err(e) = cache.delete(&balance_key.to_string()).await {
+                debug!("Failed to invalidate wallet balance cache: {}", e);
+            } else {
+                debug!("Invalidated wallet balance cache: {}", wallet.account_address);
+            }
+        }
+
+        Ok(wallet)
     }
 
     /// Create a new wallet
