@@ -2,18 +2,12 @@
 
 use std::fmt;
 
-/// Cache operation errors
 #[derive(Debug)]
 pub enum CacheError {
-    /// Connection-related errors (Redis unavailable, network issues, etc.)
     ConnectionError(String),
-    /// Serialization/deserialization errors
     SerializationError(String),
-    /// Key-related errors (invalid key format, etc.)
     KeyError(String),
-    /// TTL-related errors
     TtlError(String),
-    /// Operation-specific errors
     OperationError(String),
 }
 
@@ -49,5 +43,4 @@ impl From<bb8::RunError<redis::RedisError>> for CacheError {
     }
 }
 
-/// Result type alias for cache operations
 pub type CacheResult<T> = Result<T, CacheError>;

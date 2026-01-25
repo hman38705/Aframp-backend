@@ -1,10 +1,4 @@
 //! Redis-based caching layer for Aframp
-//!
-//! This module provides a robust, fault-tolerant Redis caching layer that:
-//! - Serves frequently accessed data in sub-millisecond latency
-//! - Reduces database load by 60-80%
-//! - Gracefully degrades when Redis is unavailable
-//! - Uses clean abstractions, strong typing, and safe invalidation strategies
 
 pub mod cache;
 pub mod error;
@@ -16,25 +10,16 @@ use redis::{AsyncCommands, Client};
 use std::time::Duration;
 use tracing::{error, info, warn};
 
-/// Redis connection pool type alias
 pub type RedisPool = Pool<RedisConnectionManager>;
 
-/// Redis cache configuration
 #[derive(Debug, Clone)]
 pub struct CacheConfig {
-    /// Redis connection URL
     pub redis_url: String,
-    /// Maximum number of connections in the pool
     pub max_connections: u32,
-    /// Minimum idle connections
     pub min_idle: u32,
-    /// Connection timeout in seconds
     pub connection_timeout: Duration,
-    /// Maximum lifetime of a connection
     pub max_lifetime: Duration,
-    /// Idle timeout before closing connection
     pub idle_timeout: Duration,
-    /// Health check interval
     pub health_check_interval: Duration,
 }
 
@@ -52,35 +37,31 @@ impl Default for CacheConfig {
     }
 }
 
-/// Initialize Redis connection pool with fault tolerance
 pub async fn init_cache_pool(config: CacheConfig) -> Result<RedisPool, CacheError> {
     info!(
         "Initializing Redis cache pool: max_connections={}, redis_url={}",
         config.max_connections, config.redis_url
     );
 
-    // Create Redis client
     let client = Client::open(config.redis_url.clone())
         .map_err(|e| {
             error!("Failed to create Redis client: {}", e);
             CacheError::ConnectionError(e.to_string())
         })?;
 
-    // Create connection manager
     let manager = RedisConnectionManager::new(client)
         .map_err(|e| {
             error!("Failed to create Redis connection manager: {}", e);
             CacheError::ConnectionError(e.to_string())
         })?;
 
-    // Build pool
     let pool = Pool::builder()
         .max_size(config.max_connections)
         .min_idle(config.min_idle)
         .connection_timeout(config.connection_timeout)
         .max_lifetime(config.max_lifetime)
         .idle_timeout(config.idle_timeout)
-        .test_on_check_out(false) // We'll handle health checks manually
+        .test_on_check_out(false)
         .build(manager)
         .await
         .map_err(|e| {
@@ -88,17 +69,15 @@ pub async fn init_cache_pool(config: CacheConfig) -> Result<RedisPool, CacheErro
             CacheError::ConnectionError(e.to_string())
         })?;
 
-    // Test connection
     if let Err(e) = test_connection(&pool).await {
         warn!("Initial Redis connection test failed, but continuing: {}", e);
-        // Don't fail here - allow graceful degradation
     }
 
     info!("Redis cache pool initialized successfully");
     Ok(pool)
 }
 
-/// Test Redis connection
+///
 async fn test_connection(pool: &RedisPool) -> Result<(), CacheError> {
     let mut conn = pool.get().await
         .map_err(|e| {
@@ -117,12 +96,10 @@ async fn test_connection(pool: &RedisPool) -> Result<(), CacheError> {
     Ok(())
 }
 
-/// Health check for Redis connection pool
 pub async fn health_check(pool: &RedisPool) -> Result<(), CacheError> {
     test_connection(pool).await
 }
 
-/// Get pool statistics
 #[derive(Debug)]
 pub struct CacheStats {
     pub connections: u32,
@@ -138,7 +115,6 @@ pub fn get_cache_stats(pool: &RedisPool) -> CacheStats {
     }
 }
 
-/// Graceful shutdown of cache pool
 pub async fn shutdown_cache_pool(pool: &RedisPool) {
     info!("Shutting down Redis cache pool");
     pool.close().await;

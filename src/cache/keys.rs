@@ -1,20 +1,14 @@
 //! Type-safe cache key builders
-//!
-//! Provides structured key generation to prevent collisions and ensure consistency.
-//! All keys follow the pattern: v1:{namespace}:{identifier}
 
 use std::fmt;
 
-/// Cache key namespace constants
 pub const VERSION: &str = "v1";
 
-/// Wallet-related cache keys
 pub mod wallet {
     use super::*;
 
     pub const NAMESPACE: &str = "wallet";
 
-    /// Wallet balance key: v1:wallet:balance:{address}
     #[derive(Debug, Clone)]
     pub struct BalanceKey {
         pub address: String,
@@ -34,7 +28,6 @@ pub mod wallet {
         }
     }
 
-    /// Trustline existence key: v1:wallet:trustline:{address}
     #[derive(Debug, Clone)]
     pub struct TrustlineKey {
         pub address: String,
@@ -54,7 +47,6 @@ pub mod wallet {
         }
     }
 
-    /// Transaction count key: v1:wallet:tx_count:{address}
     #[derive(Debug, Clone)]
     pub struct TransactionCountKey {
         pub address: String,
@@ -75,13 +67,11 @@ pub mod wallet {
     }
 }
 
-/// Exchange rate cache keys
 pub mod exchange_rate {
     use super::*;
 
     pub const NAMESPACE: &str = "rate";
 
-    /// Currency pair rate key: v1:rate:{from_currency}:{to_currency}
     #[derive(Debug, Clone)]
     pub struct CurrencyPairKey {
         pub from_currency: String,
@@ -96,7 +86,6 @@ pub mod exchange_rate {
             }
         }
 
-        /// Create AFRI-specific rate key
         pub fn afri_rate(to_currency: impl Into<String>) -> Self {
             Self::new("AFRI", to_currency)
         }
@@ -108,7 +97,6 @@ pub mod exchange_rate {
         }
     }
 
-    /// Conversion calculation key: v1:rate:convert:{amount}:{from}:{to}
     #[derive(Debug, Clone)]
     pub struct ConversionKey {
         pub amount: String,
@@ -133,13 +121,11 @@ pub mod exchange_rate {
     }
 }
 
-/// Transaction cache keys
 pub mod transaction {
     use super::*;
 
     pub const NAMESPACE: &str = "transaction";
 
-    /// Transaction status key: v1:transaction:status:{tx_hash}
     #[derive(Debug, Clone)]
     pub struct StatusKey {
         pub tx_hash: String,
@@ -159,7 +145,6 @@ pub mod transaction {
         }
     }
 
-    /// Recent transactions key: v1:transaction:recent:{address}
     #[derive(Debug, Clone)]
     pub struct RecentKey {
         pub address: String,
@@ -180,13 +165,11 @@ pub mod transaction {
     }
 }
 
-/// Authentication and session cache keys
 pub mod auth {
     use super::*;
 
     pub const NAMESPACE: &str = "auth";
 
-    /// User session key: v1:auth:session:{session_id}
     #[derive(Debug, Clone)]
     pub struct SessionKey {
         pub session_id: String,
@@ -206,7 +189,6 @@ pub mod auth {
         }
     }
 
-    /// JWT validation key: v1:auth:jwt:{token_hash}
     #[derive(Debug, Clone)]
     pub struct JwtKey {
         pub token_hash: String,
@@ -226,7 +208,6 @@ pub mod auth {
         }
     }
 
-    /// Rate limiting key: v1:auth:rate_limit:{identifier}:{action}
     #[derive(Debug, Clone)]
     pub struct RateLimitKey {
         pub identifier: String,
@@ -249,13 +230,11 @@ pub mod auth {
     }
 }
 
-/// Bill payment cache keys
 pub mod bill_payment {
     use super::*;
 
     pub const NAMESPACE: &str = "bill";
 
-    /// Provider configuration key: v1:bill:provider:{provider_id}
     #[derive(Debug, Clone)]
     pub struct ProviderKey {
         pub provider_id: String,
@@ -275,7 +254,6 @@ pub mod bill_payment {
         }
     }
 
-    /// Provider availability key: v1:bill:available:{country_code}
     #[derive(Debug, Clone)]
     pub struct AvailabilityKey {
         pub country_code: String,
@@ -296,13 +274,11 @@ pub mod bill_payment {
     }
 }
 
-/// Fee structure cache keys
 pub mod fee {
     use super::*;
 
     pub const NAMESPACE: &str = "fee";
 
-    /// Fee structure key: v1:fee:structure:{fee_type}
     #[derive(Debug, Clone)]
     pub struct StructureKey {
         pub fee_type: String,
