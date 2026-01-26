@@ -233,7 +233,7 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> Cache<T> for Redis
         };
 
         let key_refs: Vec<&str> = keys.iter().map(|s| s.as_str()).collect();
-        let results: Vec<Option<String>> = conn.get(key_refs).await.map_err(|e| {
+        let results: Vec<Option<String>> = conn.mget(key_refs).await.map_err(|e| {
             warn!("Redis MGET failed: {}", e);
             e
         })?;

@@ -12,7 +12,7 @@ database = ["dep:sqlx", "dep:tokio", "dep:async-trait", "dep:uuid", "dep:chrono"
 cache = ["dep:redis", "dep:bb8", "dep:bb8-redis", "database"]
 
 [dependencies]
-sqlx = { version = "0.8.1", features = ["runtime-tokio-native-tls", "postgres", "uuid", "chrono", "json", "macros"], optional = true }
+sqlx = { version = "0.8.6", features = ["runtime-tokio-native-tls", "postgres", "uuid", "chrono", "json", "macros"], optional = true }
 soroban-sdk = "21.0.0"
 tokio = { version = "1.36", features = ["full"], optional = true }
 async-trait = { version = "0.1", optional = true }
@@ -29,22 +29,22 @@ http = { version = "1.0", optional = true }
 
 # Stellar SDK dependencies (always required)
 stellar_sdk = "0.1.4"
-reqwest = { version = "0.11", features = ["json"] }
-config = "0.14"
-base64 = "0.21"
-anyhow = "1.0"
-thiserror = "1.0"
-regex = { version = "1.10", optional = true }
+reqwest = { version = "0.13.1", features = ["json"] }
+config = "0.15.19"
+base64 = "0.22.1"
+anyhow = "1.0.100"
+thiserror = "2.0.18"
+regex = { version = "1.12.2", optional = true }
 
 # Redis dependencies for caching
-redis = { version = "0.25", features = ["tokio-comp", "connection-manager"], optional = true }
-bb8 = { version = "0.8", optional = true }
-bb8-redis = { version = "0.15", optional = true }
+redis = { version = "1.0.2", features = ["tokio-comp", "connection-manager"], optional = true }
+bb8 = { version = "0.9.1", optional = true }
+bb8-redis = { version = "0.26.0", optional = true }
 
 [[bin]]
 name = "Aframp-Backend"
 path = "src/main.rs"
 
 [dev-dependencies]
-soroban-sdk = { version = "21.0.0", features = ["testutils"] }
-tokio = { version = "1.36", features = ["full"] }
+soroban-sdk = { version = "25.0.1", features = ["testutils"] }
+tokio = { version = "1.49.0", features = ["full"] }

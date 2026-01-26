@@ -93,7 +93,11 @@ pub mod exchange_rate {
 
     impl fmt::Display for CurrencyPairKey {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "{}:{}:{}:{}", VERSION, NAMESPACE, self.from_currency, self.to_currency)
+            write!(
+                f,
+                "{}:{}:{}:{}",
+                VERSION, NAMESPACE, self.from_currency, self.to_currency
+            )
         }
     }
 
@@ -105,7 +109,11 @@ pub mod exchange_rate {
     }
 
     impl ConversionKey {
-        pub fn new(amount: impl Into<String>, from_currency: impl Into<String>, to_currency: impl Into<String>) -> Self {
+        pub fn new(
+            amount: impl Into<String>,
+            from_currency: impl Into<String>,
+            to_currency: impl Into<String>,
+        ) -> Self {
             Self {
                 amount: amount.into(),
                 from_currency: from_currency.into(),
@@ -116,7 +124,11 @@ pub mod exchange_rate {
 
     impl fmt::Display for ConversionKey {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "{}:{}:convert:{}:{}:{}", VERSION, NAMESPACE, self.amount, self.from_currency, self.to_currency)
+            write!(
+                f,
+                "{}:{}:convert:{}:{}:{}",
+                VERSION, NAMESPACE, self.amount, self.from_currency, self.to_currency
+            )
         }
     }
 }
@@ -225,7 +237,11 @@ pub mod auth {
 
     impl fmt::Display for RateLimitKey {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "{}:{}:rate_limit:{}:{}", VERSION, NAMESPACE, self.identifier, self.action)
+            write!(
+                f,
+                "{}:{}:rate_limit:{}:{}",
+                VERSION, NAMESPACE, self.identifier, self.action
+            )
         }
     }
 }
@@ -269,7 +285,11 @@ pub mod bill_payment {
 
     impl fmt::Display for AvailabilityKey {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "{}:{}:available:{}", VERSION, NAMESPACE, self.country_code)
+            write!(
+                f,
+                "{}:{}:available:{}",
+                VERSION, NAMESPACE, self.country_code
+            )
         }
     }
 }
