@@ -89,7 +89,8 @@ impl PaymentBuilder {
             )));
         }
 
-        self.verify_trustline(destination, asset_code, issuer).await?;
+        self.verify_trustline(destination, asset_code, issuer)
+            .await?;
 
         info!(
             "Adding payment operation: {} {} from source to {}",
@@ -177,7 +178,7 @@ impl PaymentBuilder {
             })?;
 
             let base_fee = fee_stats.last_ledger_base_fee.parse::<u32>().unwrap_or(100);
-            
+
             debug!("Fetched base fee from Horizon: {} stroops", base_fee);
             base_fee
         };
@@ -218,7 +219,7 @@ impl PaymentBuilder {
         })?;
 
         let account_info = self.client.get_account(source_account).await?;
-        
+
         let fee = self.estimate_fee().await?;
 
         info!(
