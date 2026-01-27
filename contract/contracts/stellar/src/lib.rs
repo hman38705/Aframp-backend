@@ -1,8 +1,6 @@
 #![no_std]
 
 mod storage;
-mod events;
-mod error;
 
 use soroban_sdk::{contract, contractimpl, Env, Address};
 
@@ -15,13 +13,14 @@ impl AfrIContract {
         storage::set_admin(&env, &admin);
     }
 
-    pub fn mint(env: Env, to: Address, amount: i128) {
-        let caller = env.invoker();
+    // Mint now requires the caller address for admin check
+    pub fn mint(env: Env, caller: Address, to: Address, amount: i128) {
         let admin = storage::get_admin(&env);
         if caller != admin {
             panic!("Only admin can mint");
         }
-        storage::set_balance(&env, &to, storage::get_balance(&env, &to) + amount);
+        let current = storage::get_balance(&env, &to);
+        storage::set_balance(&env, &to, current + amount);
     }
 
     pub fn burn(env: Env, from: Address, amount: i128) {
