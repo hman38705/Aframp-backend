@@ -8,11 +8,10 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["database", "cache"]
-database = ["dep:sqlx", "dep:tokio", "dep:async-trait", "dep:uuid", "dep:chrono", "dep:serde", "dep:serde_json", "dep:tracing", "dep:tracing-subscriber", "dep:axum", "dep:tower", "dep:tower-http", "dep:regex", "dep:http"]
+database = [ "dep:tokio", "dep:async-trait", "dep:uuid", "dep:chrono", "dep:serde", "dep:serde_json", "dep:tracing", "dep:tracing-subscriber", "dep:axum", "dep:tower", "dep:tower-http", "dep:regex", "dep:http", "dep:sqlx"]
 cache = ["dep:redis", "dep:bb8", "dep:bb8-redis", "database"]
 
 [dependencies]
-sqlx = { version = "0.8.6", features = ["runtime-tokio-native-tls", "postgres", "uuid", "chrono", "json", "macros"], optional = true }
 soroban-sdk = "21.0.0"
 tokio = { version = "1.36", features = ["full"], optional = true }
 async-trait = { version = "0.1", optional = true }
@@ -26,6 +25,7 @@ axum = { version = "0.7", optional = true }
 tower = { version = "0.4", optional = true }
 tower-http = { version = "0.5", features = ["trace", "request-id"], optional = true }
 http = { version = "1.0", optional = true }
+sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "postgres", "chrono", "uuid"], optional = true }
 
 # Stellar SDK dependencies (always required)
 stellar_sdk = "0.1.4"
@@ -40,6 +40,8 @@ regex = { version = "1.12.2", optional = true }
 redis = { version = "1.0.2", features = ["tokio-comp", "connection-manager"], optional = true }
 bb8 = { version = "0.9.1", optional = true }
 bb8-redis = { version = "0.26.0", optional = true }
+
+
 
 [[bin]]
 name = "Aframp-Backend"
