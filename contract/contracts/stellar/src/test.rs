@@ -1,9 +1,8 @@
 #![cfg(test)]
 
 use soroban_sdk::{
-    Env,
-    Address,
     testutils::{Address as _, Ledger},
+    Address, Env,
 };
 
 use crate::AfrIContract;

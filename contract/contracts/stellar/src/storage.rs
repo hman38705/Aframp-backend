@@ -1,4 +1,4 @@
-use soroban_sdk::{Env, Address, Map, Symbol, symbol_short};
+use soroban_sdk::{symbol_short, Address, Env, Map, Symbol};
 
 const ADMIN_KEY: Symbol = symbol_short!("ADMIN");
 const BALANCES_KEY: Symbol = symbol_short!("BAL");
