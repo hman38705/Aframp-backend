@@ -1,4 +1,4 @@
-use soroban_sdk::{Env, Address};
+use soroban_sdk::{Env, Address, panic_with_error};
 
 use crate::{storage, events};
 use crate::error::ContractError;
