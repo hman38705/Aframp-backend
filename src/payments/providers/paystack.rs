@@ -287,7 +287,7 @@ impl PaymentProvider for PaystackProvider {
 
         Ok(PaymentResponse {
             authorization_url: Some(response.authorization_url),
-            access_code: Some(response.access_code),
+            access_code: Some(response.access_code.clone()),
             reference: response.reference,
             provider_data: Some(serde_json::json!({
                 "access_code": response.access_code,

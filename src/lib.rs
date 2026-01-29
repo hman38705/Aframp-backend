@@ -31,6 +31,10 @@ pub mod middleware;
 #[cfg(feature = "cache")]
 pub mod cache;
 
+// Services
+#[cfg(feature = "database")]
+pub mod services;
+
 // Payment providers
 #[cfg(feature = "database")]
 pub mod payments;
