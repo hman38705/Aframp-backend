@@ -58,6 +58,7 @@ pub trait Cache<T: Serialize + DeserializeOwned + Send + Sync + 'static> {
 }
 
 /// Redis implementation of the Cache trait
+#[derive(Debug, Clone)]
 pub struct RedisCache {
     pool: RedisPool,
 }

@@ -12,6 +12,7 @@ use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
 
 #[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub struct StellarClient {
     http_client: Client,
     config: StellarConfig,
