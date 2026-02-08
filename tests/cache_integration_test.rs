@@ -72,20 +72,37 @@ mod cache_tests {
         let mut repo = WalletRepository::new(db_pool);
         repo.enable_cache(cache);
 
-        // Create a test wallet
+        // Create a test wallet with unique address
+        let unique_wallet_address = format!(
+            "GA{}",
+            uuid::Uuid::new_v4()
+                .to_string()
+                .replace('-', "")
+                .chars()
+                .take(32)
+                .collect::<String>()
+        );
         let wallet = repo
-            .create_wallet("test_user", "GA123456789", "100.00")
+            .create_wallet("test_user", &unique_wallet_address, "100.00")
             .await
             .unwrap();
 
         // First balance check should cache
-        let wallet_data = repo.find_by_account("GA123456789").await.unwrap().unwrap();
+        let wallet_data = repo
+            .find_by_account(&unique_wallet_address)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(wallet_data.balance, "100.00");
 
         // Update balance should invalidate cache
         repo.update_balance(&wallet.id, "150.00").await.unwrap();
 
-        let updated_wallet = repo.find_by_account("GA123456789").await.unwrap().unwrap();
+        let updated_wallet = repo
+            .find_by_account(&unique_wallet_address)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(updated_wallet.balance, "150.00");
 
         // Cleanup
@@ -100,15 +117,29 @@ mod cache_tests {
         let mut repo = TrustlineRepository::new(db_pool);
         repo.enable_cache(cache);
 
-        // Create a test trustline
+        // Create a test trustline with unique address
+        let unique_trustline_address = format!(
+            "GA{}",
+            uuid::Uuid::new_v4()
+                .to_string()
+                .replace('-', "")
+                .chars()
+                .take(32)
+                .collect::<String>()
+        );
         let trustline = repo
-            .create_trustline("GA123456789", "AFRI", "issuer_address", "1000.00")
+            .create_trustline(
+                &unique_trustline_address,
+                "AFRI",
+                "issuer_address",
+                "1000.00",
+            )
             .await
             .unwrap();
 
         // First check should cache existence
         let found_trustline = repo
-            .find_trustline("GA123456789", "AFRI")
+            .find_trustline(&unique_trustline_address, "AFRI")
             .await
             .unwrap()
             .unwrap();
@@ -118,7 +149,7 @@ mod cache_tests {
         repo.update_status(&trustline.id, "active").await.unwrap();
 
         let updated_trustline = repo
-            .find_trustline("GA123456789", "AFRI")
+            .find_trustline(&unique_trustline_address, "AFRI")
             .await
             .unwrap()
             .unwrap();
@@ -189,13 +220,14 @@ mod cache_tests {
     #[tokio::test]
     async fn test_cache_key_generation() {
         // Test that our key builders generate expected strings
-        let balance_key = wallet::BalanceKey::new("GA123456789");
+        let test_address = "GA123456789"; // Use a fixed address for predictable key generation
+        let balance_key = wallet::BalanceKey::new(test_address);
         assert_eq!(balance_key.to_string(), "v1:wallet:balance:GA123456789");
 
         let rate_key = exchange_rate::CurrencyPairKey::afri_rate("USD");
         assert_eq!(rate_key.to_string(), "v1:rate:AFRI:USD");
 
-        let trustline_key = wallet::TrustlineKey::new("GA123456789");
+        let trustline_key = wallet::TrustlineKey::new(test_address);
         assert_eq!(trustline_key.to_string(), "v1:wallet:trustline:GA123456789");
     }
 

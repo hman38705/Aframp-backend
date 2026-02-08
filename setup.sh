@@ -63,12 +63,16 @@ sudo -u postgres createdb aframp 2>/dev/null || echo "✅ Database already exist
 sudo -u postgres createuser -s $USER 2>/dev/null || echo "✅ User already exists"
 
 # Install sqlx CLI
-echo "🔧 Installing sqlx CLI..."
-cargo install --features postgres sqlx-cli --quiet
+if ! command -v sqlx &> /dev/null; then
+    echo "🔧 Installing sqlx CLI..."
+    cargo install --features postgres sqlx-cli --quiet
+else
+    echo "✅ sqlx CLI is already installed"
+fi
 
 # Run migrations
 echo "📋 Running database migrations..."
-DATABASE_URL=postgresql://localhost/aframp sqlx migrate run
+DATABASE_URL=postgresql:///aframp sqlx migrate run
 
 # Create .env file if it doesn't exist
 if [ ! -f .env ]; then

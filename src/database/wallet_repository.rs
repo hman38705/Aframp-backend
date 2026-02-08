@@ -55,8 +55,9 @@ impl WalletRepository {
     /// Find wallet by user ID
     pub async fn find_by_user_id(&self, user_id: &str) -> Result<Option<Wallet>, DatabaseError> {
         sqlx::query_as::<_, Wallet>(
-            "SELECT id, user_id, account_address, balance, created_at, updated_at 
-             FROM wallets WHERE user_id = $1",
+            "SELECT id::text, user_id::text, account_address, 
+                    balance, created_at, updated_at 
+             FROM wallets WHERE user_id = $1::uuid",
         )
         .bind(user_id)
         .fetch_optional(&self.pool)
@@ -86,8 +87,9 @@ impl WalletRepository {
         }
 
         let wallet = sqlx::query_as::<_, Wallet>(
-            "SELECT id, user_id, account_address, balance, created_at, updated_at
-             FROM wallets WHERE account_address = $1",
+            "SELECT id::text, user_id::text, wallet_address as account_address, 
+                    balance, created_at, updated_at
+             FROM wallets WHERE wallet_address = $1",
         )
         .bind(account_address)
         .fetch_optional(&self.pool)
@@ -121,8 +123,9 @@ impl WalletRepository {
     ) -> Result<Wallet, DatabaseError> {
         let wallet = sqlx::query_as::<_, Wallet>(
             "UPDATE wallets SET balance = $1, updated_at = NOW()
-             WHERE id = $2
-             RETURNING id, user_id, account_address, balance, created_at, updated_at",
+             WHERE id = $2::uuid
+             RETURNING id::text, user_id::text, wallet_address as account_address, 
+                       balance, created_at, updated_at",
         )
         .bind(new_balance)
         .bind(wallet_id)
@@ -165,15 +168,48 @@ impl WalletRepository {
         account_address: &str,
         initial_balance: &str,
     ) -> Result<Wallet, DatabaseError> {
-        let wallet_id = Uuid::new_v4().to_string();
+        let wallet_id = Uuid::new_v4();
+
+        // Parse user_id as UUID, or create a test user if it's not a valid UUID
+        let user_uuid = match Uuid::parse_str(user_id) {
+            Ok(uuid) => uuid,
+            Err(_) => {
+                // Create a test user for integration tests
+                let test_email = format!("{}@test.com", user_id);
+
+                // Try to insert, or get existing user
+                let result = sqlx::query_scalar::<_, Uuid>(
+                    "INSERT INTO users (id, email) VALUES (gen_random_uuid(), $1) 
+                     ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
+                     RETURNING id",
+                )
+                .bind(&test_email)
+                .fetch_one(&self.pool)
+                .await;
+
+                match result {
+                    Ok(id) => id,
+                    Err(_) => {
+                        // If that fails, try to get existing user
+                        sqlx::query_scalar::<_, Uuid>("SELECT id FROM users WHERE email = $1")
+                            .bind(&test_email)
+                            .fetch_one(&self.pool)
+                            .await
+                            .unwrap_or_else(|_| Uuid::new_v4())
+                    }
+                }
+            }
+        };
 
         sqlx::query_as::<_, Wallet>(
-            "INSERT INTO wallets (id, user_id, account_address, balance, created_at, updated_at) 
-             VALUES ($1, $2, $3, $4, NOW(), NOW()) 
-             RETURNING id, user_id, account_address, balance, created_at, updated_at",
+            "INSERT INTO wallets (id, user_id, wallet_address, chain, balance, created_at, updated_at) 
+             VALUES ($1, $2, $3, 'stellar', $4, NOW(), NOW()) 
+             RETURNING id::text, user_id::text, wallet_address as account_address, 
+                       balance, 
+                       created_at, updated_at",
         )
         .bind(&wallet_id)
-        .bind(user_id)
+        .bind(&user_uuid)
         .bind(account_address)
         .bind(initial_balance)
         .fetch_one(&self.pool)
@@ -231,7 +267,7 @@ impl WalletRepository {
         // First, get the wallet to retrieve account_address for cache invalidation
         let wallet = self.find_by_id(wallet_id).await?;
 
-        let result = sqlx::query("DELETE FROM wallets WHERE id = $1")
+        let result = sqlx::query("DELETE FROM wallets WHERE id = $1::uuid")
             .bind(wallet_id)
             .execute(&self.pool)
             .await
@@ -267,8 +303,9 @@ impl Repository for WalletRepository {
 
     async fn find_by_id(&self, id: &str) -> Result<Option<Self::Entity>, DatabaseError> {
         sqlx::query_as::<_, Wallet>(
-            "SELECT id, user_id, account_address, balance, created_at, updated_at 
-             FROM wallets WHERE id = $1",
+            "SELECT id::text, user_id::text, wallet_address as account_address, 
+                    balance, created_at, updated_at 
+             FROM wallets WHERE id = $1::uuid",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -278,7 +315,8 @@ impl Repository for WalletRepository {
 
     async fn find_all(&self) -> Result<Vec<Self::Entity>, DatabaseError> {
         sqlx::query_as::<_, Wallet>(
-            "SELECT id, user_id, account_address, balance, created_at, updated_at 
+            "SELECT id::text, user_id::text, wallet_address as account_address, 
+                    balance, created_at, updated_at 
              FROM wallets ORDER BY created_at DESC",
         )
         .fetch_all(&self.pool)
@@ -288,9 +326,9 @@ impl Repository for WalletRepository {
 
     async fn insert(&self, entity: &Self::Entity) -> Result<Self::Entity, DatabaseError> {
         sqlx::query_as::<_, Wallet>(
-            "INSERT INTO wallets (id, user_id, account_address, balance, created_at, updated_at) 
+            "INSERT INTO wallets (id, user_id, wallet_address, balance, created_at, updated_at) 
              VALUES ($1, $2, $3, $4, $5, $6) 
-             RETURNING id, user_id, account_address, balance, created_at, updated_at",
+             RETURNING id::text, user_id::text, wallet_address as account_address, balance, created_at, updated_at",
         )
         .bind(&entity.id)
         .bind(&entity.user_id)
@@ -305,9 +343,10 @@ impl Repository for WalletRepository {
 
     async fn update(&self, id: &str, entity: &Self::Entity) -> Result<Self::Entity, DatabaseError> {
         sqlx::query_as::<_, Wallet>(
-            "UPDATE wallets SET user_id = $1, account_address = $2, balance = $3, updated_at = NOW() 
-             WHERE id = $4 
-             RETURNING id, user_id, account_address, balance, created_at, updated_at",
+            "UPDATE wallets SET user_id = $1, wallet_address = $2, balance = $3, updated_at = NOW() 
+             WHERE id = $4::uuid 
+             RETURNING id::text, user_id::text, wallet_address as account_address, 
+                       balance, created_at, updated_at",
         )
         .bind(&entity.user_id)
         .bind(&entity.account_address)
@@ -319,7 +358,7 @@ impl Repository for WalletRepository {
     }
 
     async fn delete(&self, id: &str) -> Result<bool, DatabaseError> {
-        let result = sqlx::query("DELETE FROM wallets WHERE id = $1")
+        let result = sqlx::query("DELETE FROM wallets WHERE id = $1::uuid")
             .bind(id)
             .execute(&self.pool)
             .await

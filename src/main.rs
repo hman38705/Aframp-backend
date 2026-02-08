@@ -2,16 +2,18 @@ mod cache;
 mod chains;
 mod database;
 mod error;
-use axum::{
-    routing::{get, post},
-    Router,
-};
+mod middleware;
+
+use axum::{routing::get, Router};
 use cache::{init_cache_pool, CacheConfig, RedisCache};
 use chains::stellar::client::StellarClient;
 use chains::stellar::config::StellarConfig;
 use database::{init_pool, PoolConfig};
 use dotenv::dotenv;
+use middleware::logging::{request_logging_middleware, UuidRequestId};
 use std::net::SocketAddr;
+use tower::ServiceBuilder;
+use tower_http::request_id::{PropagateRequestIdLayer, SetRequestIdLayer};
 use tracing::{error, info};
 
 #[tokio::main]
@@ -94,7 +96,7 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => info!("Error checking account existence (this is expected for non-existent test addresses): {}", e),
     }
 
-    // Create the application router
+    // Create the application router with logging middleware
     let app = Router::new()
         .route("/", get(root))
         .route("/health", get(health))
@@ -103,7 +105,13 @@ async fn main() -> anyhow::Result<()> {
             db_pool,
             redis_cache,
             stellar_client,
-        });
+        })
+        .layer(
+            ServiceBuilder::new()
+                .layer(SetRequestIdLayer::x_request_id(UuidRequestId))
+                .layer(axum::middleware::from_fn(request_logging_middleware))
+                .layer(PropagateRequestIdLayer::x_request_id()),
+        );
 
     // Run the server
     let host = std::env::var("HOST".to_string()).unwrap();

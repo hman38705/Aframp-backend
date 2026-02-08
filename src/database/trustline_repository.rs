@@ -80,7 +80,7 @@ impl TrustlineRepository {
         }
 
         let trustline = sqlx::query_as::<_, Trustline>(
-            "SELECT id, account, asset_code, balance, limit, issuer, status, created_at, updated_at
+            "SELECT id, account, asset_code, balance, \"limit\", issuer, status, created_at, updated_at
              FROM trustlines
              WHERE account = $1 AND asset_code = $2",
         )
@@ -115,7 +115,7 @@ impl TrustlineRepository {
     /// Find all trustlines for an account
     pub async fn find_by_account(&self, account: &str) -> Result<Vec<Trustline>, DatabaseError> {
         sqlx::query_as::<_, Trustline>(
-            "SELECT id, account, asset_code, balance, limit, issuer, status, created_at, updated_at 
+            "SELECT id, account, asset_code, balance, \"limit\", issuer, status, created_at, updated_at 
              FROM trustlines 
              WHERE account = $1 
              ORDER BY created_at DESC",
@@ -138,9 +138,9 @@ impl TrustlineRepository {
         let trustline_id = Uuid::new_v4().to_string();
 
         let trustline = sqlx::query_as::<_, Trustline>(
-            "INSERT INTO trustlines (id, account, asset_code, balance, limit, issuer, status, created_at, updated_at)
+            "INSERT INTO trustlines (id, account, asset_code, balance, \"limit\", issuer, status, created_at, updated_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
-             RETURNING id, account, asset_code, balance, limit, issuer, status, created_at, updated_at",
+             RETURNING id, account, asset_code, balance, \"limit\", issuer, status, created_at, updated_at",
         )
         .bind(&trustline_id)
         .bind(account)
@@ -180,7 +180,7 @@ impl TrustlineRepository {
         sqlx::query_as::<_, Trustline>(
             "UPDATE trustlines SET balance = $1, updated_at = NOW() 
              WHERE id = $2 
-             RETURNING id, account, asset_code, balance, limit, issuer, status, created_at, updated_at",
+             RETURNING id, account, asset_code, balance, \"limit\", issuer, status, created_at, updated_at",
         )
         .bind(new_balance)
         .bind(trustline_id)
@@ -198,7 +198,7 @@ impl TrustlineRepository {
         sqlx::query_as::<_, Trustline>(
             "UPDATE trustlines SET status = $1, updated_at = NOW() 
              WHERE id = $2 
-             RETURNING id, account, asset_code, balance, limit, issuer, status, created_at, updated_at",
+             RETURNING id, account, asset_code, balance, \"limit\", issuer, status, created_at, updated_at",
         )
         .bind(new_status)
         .bind(trustline_id)
@@ -236,7 +236,7 @@ impl TrustlineRepository {
     /// Find all active trustlines for asset
     pub async fn find_by_asset(&self, asset_code: &str) -> Result<Vec<Trustline>, DatabaseError> {
         sqlx::query_as::<_, Trustline>(
-            "SELECT id, account, asset_code, balance, limit, issuer, status, created_at, updated_at 
+            "SELECT id, account, asset_code, balance, \"limit\", issuer, status, created_at, updated_at 
              FROM trustlines 
              WHERE asset_code = $1 AND status = 'active' 
              ORDER BY created_at DESC",
@@ -292,7 +292,7 @@ impl Repository for TrustlineRepository {
 
     async fn find_by_id(&self, id: &str) -> Result<Option<Self::Entity>, DatabaseError> {
         sqlx::query_as::<_, Trustline>(
-            "SELECT id, account, asset_code, balance, limit, issuer, status, created_at, updated_at 
+            "SELECT id, account, asset_code, balance, \"limit\", issuer, status, created_at, updated_at 
              FROM trustlines WHERE id = $1",
         )
         .bind(id)
@@ -303,7 +303,7 @@ impl Repository for TrustlineRepository {
 
     async fn find_all(&self) -> Result<Vec<Self::Entity>, DatabaseError> {
         sqlx::query_as::<_, Trustline>(
-            "SELECT id, account, asset_code, balance, limit, issuer, status, created_at, updated_at 
+            "SELECT id, account, asset_code, balance, \"limit\", issuer, status, created_at, updated_at 
              FROM trustlines ORDER BY created_at DESC",
         )
         .fetch_all(&self.pool)
@@ -313,9 +313,9 @@ impl Repository for TrustlineRepository {
 
     async fn insert(&self, entity: &Self::Entity) -> Result<Self::Entity, DatabaseError> {
         sqlx::query_as::<_, Trustline>(
-            "INSERT INTO trustlines (id, account, asset_code, balance, limit, issuer, status, created_at, updated_at) 
+            "INSERT INTO trustlines (id, account, asset_code, balance, \"limit\", issuer, status, created_at, updated_at) 
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) 
-             RETURNING id, account, asset_code, balance, limit, issuer, status, created_at, updated_at",
+             RETURNING id, account, asset_code, balance, \"limit\", issuer, status, created_at, updated_at",
         )
         .bind(&entity.id)
         .bind(&entity.account)
@@ -334,9 +334,9 @@ impl Repository for TrustlineRepository {
     async fn update(&self, id: &str, entity: &Self::Entity) -> Result<Self::Entity, DatabaseError> {
         sqlx::query_as::<_, Trustline>(
             "UPDATE trustlines 
-             SET account = $1, asset_code = $2, balance = $3, limit = $4, issuer = $5, status = $6, updated_at = NOW() 
+             SET account = $1, asset_code = $2, balance = $3, \"limit\" = $4, issuer = $5, status = $6, updated_at = NOW() 
              WHERE id = $7 
-             RETURNING id, account, asset_code, balance, limit, issuer, status, created_at, updated_at",
+             RETURNING id, account, asset_code, balance, \"limit\", issuer, status, created_at, updated_at",
         )
         .bind(&entity.account)
         .bind(&entity.asset_code)

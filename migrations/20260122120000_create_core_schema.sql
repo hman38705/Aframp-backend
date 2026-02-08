@@ -34,9 +34,11 @@ CREATE TABLE wallets (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   wallet_address VARCHAR(255) NOT NULL UNIQUE,
+  account_address VARCHAR(255),
   chain TEXT NOT NULL CHECK (chain IN ('stellar', 'ethereum', 'bitcoin')),
   has_afri_trustline BOOLEAN NOT NULL DEFAULT FALSE,
   afri_balance NUMERIC(36, 18) NOT NULL DEFAULT 0,
+  balance TEXT NOT NULL DEFAULT '0',
   last_balance_check TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -44,8 +46,10 @@ CREATE TABLE wallets (
 
 COMMENT ON TABLE wallets IS 'Connected wallet addresses across supported chains.';
 COMMENT ON COLUMN wallets.wallet_address IS 'Unique on-chain address; Stellar addresses are 56 chars but longer are supported.';
+COMMENT ON COLUMN wallets.account_address IS 'Alternative account identifier for the wallet.';
 COMMENT ON COLUMN wallets.chain IS 'Blockchain network identifier.';
 COMMENT ON COLUMN wallets.afri_balance IS 'Cached AFRI balance for quick reads; refresh via last_balance_check.';
+COMMENT ON COLUMN wallets.balance IS 'Current wallet balance as string.';
 COMMENT ON COLUMN wallets.last_balance_check IS 'Timestamp of last on-chain AFRI balance refresh.';
 COMMENT ON COLUMN wallets.created_at IS 'Timestamp when the wallet record was created.';
 COMMENT ON COLUMN wallets.updated_at IS 'Timestamp when the wallet record was last updated.';
@@ -115,11 +119,55 @@ CREATE TABLE afri_trustlines (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE exchange_rates (
+  id TEXT PRIMARY KEY,
+  from_currency TEXT NOT NULL,
+  to_currency TEXT NOT NULL,
+  rate TEXT NOT NULL,
+  source TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (from_currency, to_currency)
+);
+
+CREATE TABLE trustlines (
+  id TEXT PRIMARY KEY,
+  account VARCHAR(255) NOT NULL,
+  asset_code TEXT NOT NULL,
+  balance TEXT NOT NULL DEFAULT '0',
+  "limit" TEXT NOT NULL DEFAULT '0',
+  issuer TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'active', 'inactive', 'deleted')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (account, asset_code)
+);
+
 COMMENT ON TABLE afri_trustlines IS 'AFRI trustline establishment per wallet.';
 COMMENT ON COLUMN afri_trustlines.established_at IS 'Timestamp when the trustline was established.';
 COMMENT ON COLUMN afri_trustlines.metadata IS 'Chain-specific trustline metadata.';
 COMMENT ON COLUMN afri_trustlines.created_at IS 'Timestamp when the trustline record was created.';
 COMMENT ON COLUMN afri_trustlines.updated_at IS 'Timestamp when the trustline record was last updated.';
+
+COMMENT ON TABLE exchange_rates IS 'Current and historical exchange rates between currencies.';
+COMMENT ON COLUMN exchange_rates.id IS 'Unique identifier for the exchange rate record.';
+COMMENT ON COLUMN exchange_rates.from_currency IS 'Source currency code.';
+COMMENT ON COLUMN exchange_rates.to_currency IS 'Target currency code.';
+COMMENT ON COLUMN exchange_rates.rate IS 'Exchange rate as string.';
+COMMENT ON COLUMN exchange_rates.source IS 'Source of the rate (e.g., external API, manual input).';
+COMMENT ON COLUMN exchange_rates.created_at IS 'Timestamp when the rate was created.';
+COMMENT ON COLUMN exchange_rates.updated_at IS 'Timestamp when the rate was last updated.';
+
+COMMENT ON TABLE trustlines IS 'Trustline operations for asset tracking.';
+COMMENT ON COLUMN trustlines.id IS 'Unique identifier for the trustline.';
+COMMENT ON COLUMN trustlines.account IS 'Account address for the trustline.';
+COMMENT ON COLUMN trustlines.asset_code IS 'Asset code for the trustline.';
+COMMENT ON COLUMN trustlines.balance IS 'Current trustline balance as string.';
+COMMENT ON COLUMN trustlines."limit" IS 'Trustline limit as string.';
+COMMENT ON COLUMN trustlines.issuer IS 'Issuer of the asset.';
+COMMENT ON COLUMN trustlines.status IS 'Current status of the trustline.';
+COMMENT ON COLUMN trustlines.created_at IS 'Timestamp when the trustline was created.';
+COMMENT ON COLUMN trustlines.updated_at IS 'Timestamp when the trustline was last updated.';
 
 CREATE TRIGGER set_updated_at_users
   BEFORE UPDATE ON users
@@ -141,12 +189,26 @@ CREATE TRIGGER set_updated_at_afri_trustlines
   BEFORE UPDATE ON afri_trustlines
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
+CREATE TRIGGER set_updated_at_exchange_rates
+  BEFORE UPDATE ON exchange_rates
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER set_updated_at_trustlines
+  BEFORE UPDATE ON trustlines
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
 -- Indexes for frequently queried columns.
 -- Note: users.email and wallets.wallet_address are already indexed via UNIQUE constraints.
 CREATE INDEX idx_transactions_wallet_address ON transactions(wallet_address);
 CREATE INDEX idx_transactions_status ON transactions(status);
+CREATE INDEX idx_wallets_account_address ON wallets(account_address);
+CREATE INDEX idx_exchange_rates_currencies ON exchange_rates(from_currency, to_currency);
+CREATE INDEX idx_trustlines_account ON trustlines(account);
+CREATE INDEX idx_trustlines_asset ON trustlines(asset_code);
 
 -- migrate:down
+DROP TABLE IF EXISTS trustlines;
+DROP TABLE IF EXISTS exchange_rates;
 DROP TABLE IF EXISTS afri_trustlines;
 DROP TABLE IF EXISTS transactions;
 DROP TABLE IF EXISTS wallets;

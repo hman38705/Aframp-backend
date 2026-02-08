@@ -19,13 +19,13 @@ pub mod chains;
 #[cfg(feature = "database")]
 pub mod error;
 
+// Middleware for request handling
+#[cfg(feature = "database")]
+pub mod middleware;
+
 // Logging and tracing
 #[cfg(feature = "database")]
 pub mod logging;
-
-// Middleware
-#[cfg(feature = "database")]
-pub mod middleware;
 
 // Cache layer
 #[cfg(feature = "cache")]
