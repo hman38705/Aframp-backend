@@ -1,10 +1,16 @@
 mod cache;
 mod chains;
+mod config;
 mod database;
 mod error;
+mod health;
+mod logging;
 mod middleware;
 
-use axum::{routing::get, Router};
+// Imports
+use crate::health::{HealthChecker, HealthStatus};
+use crate::logging::init_tracing;
+use axum::{routing::get, Json, Router};
 use cache::{init_cache_pool, CacheConfig, RedisCache};
 use chains::stellar::client::StellarClient;
 use chains::stellar::config::StellarConfig;
@@ -12,18 +18,49 @@ use database::{init_pool, PoolConfig};
 use dotenv::dotenv;
 use middleware::logging::{request_logging_middleware, UuidRequestId};
 use std::net::SocketAddr;
+use tokio::signal;
 use tower::ServiceBuilder;
 use tower_http::request_id::{PropagateRequestIdLayer, SetRequestIdLayer};
 use tracing::{error, info};
 
+/// Graceful shutdown signal handler
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    info!("Shutdown signal received, starting graceful shutdown");
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    // Initialize advanced tracing
+    init_tracing();
 
     dotenv().ok();
-    info!("Starting Aframp backend service");
+
+    info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "Starting Aframp backend service"
+    );
 
     // Initialize database connection pool
     let database_url = std::env::var("DATABASE_URL".to_string()).unwrap();
@@ -96,15 +133,22 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => info!("Error checking account existence (this is expected for non-existent test addresses): {}", e),
     }
 
+    // Initialize health checker
+    let health_checker =
+        HealthChecker::new(db_pool.clone(), redis_cache.clone(), stellar_client.clone());
+
     // Create the application router with logging middleware
     let app = Router::new()
         .route("/", get(root))
         .route("/health", get(health))
+        .route("/health/ready", get(readiness))
+        .route("/health/live", get(liveness))
         .route("/api/stellar/account/{address}", get(get_stellar_account))
         .with_state(AppState {
             db_pool,
             redis_cache,
             stellar_client,
+            health_checker,
         })
         .layer(
             ServiceBuilder::new()
@@ -113,7 +157,7 @@ async fn main() -> anyhow::Result<()> {
                 .layer(PropagateRequestIdLayer::x_request_id()),
         );
 
-    // Run the server
+    // Run the server with graceful shutdown
     let host = std::env::var("HOST".to_string()).unwrap();
     let port = std::env::var("PORT".to_string()).unwrap();
     let addr: SocketAddr = format!("{}:{}", host, port).parse()?;
@@ -121,7 +165,12 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     info!("Server listening on http://{}", addr);
 
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .unwrap();
+
+    info!("Server shutdown complete");
 
     Ok(())
 }
@@ -132,6 +181,7 @@ struct AppState {
     db_pool: sqlx::PgPool,
     redis_cache: RedisCache,
     stellar_client: StellarClient,
+    health_checker: HealthChecker,
 }
 
 // Handlers
@@ -139,8 +189,34 @@ async fn root() -> &'static str {
     "Welcome to Aframp Backend API"
 }
 
-async fn health() -> &'static str {
-    "OK"
+async fn health(
+    axum::extract::State(state): axum::extract::State<AppState>,
+) -> Result<Json<HealthStatus>, (axum::http::StatusCode, String)> {
+    let health_status = state.health_checker.check_health().await;
+
+    // Return 503 if any component is unhealthy
+    if matches!(health_status.status, crate::health::HealthState::Unhealthy) {
+        Err((
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "Service Unavailable".to_string(),
+        ))
+    } else {
+        Ok(Json(health_status))
+    }
+}
+
+/// Readiness probe - checks if the service is ready to accept traffic
+async fn readiness(
+    axum::extract::State(state): axum::extract::State<AppState>,
+) -> Result<Json<HealthStatus>, (axum::http::StatusCode, String)> {
+    // Readiness checks all dependencies
+    health(axum::extract::State(state)).await
+}
+
+/// Liveness probe - checks if the service is alive (basic check)
+async fn liveness() -> Result<&'static str, (axum::http::StatusCode, String)> {
+    // Liveness just checks if the service is running
+    Ok("OK")
 }
 
 async fn get_stellar_account(

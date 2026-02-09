@@ -60,7 +60,7 @@ pub trait Cache<T: Serialize + DeserializeOwned + Send + Sync + 'static> {
 /// Redis implementation of the Cache trait
 #[derive(Debug, Clone)]
 pub struct RedisCache {
-    pool: RedisPool,
+    pub pool: RedisPool,
 }
 
 impl RedisCache {
@@ -70,7 +70,7 @@ impl RedisCache {
     }
 
     /// Get a connection from the pool with error handling
-    async fn get_connection(&self) -> CacheResult<RedisConnection<'_>> {
+    pub async fn get_connection(&self) -> CacheResult<RedisConnection<'_>> {
         self.pool.get().await.map_err(|e| {
             warn!("Failed to get Redis connection: {}", e);
             e.into()

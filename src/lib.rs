@@ -39,6 +39,14 @@ pub mod services;
 #[cfg(feature = "database")]
 pub mod payments;
 
+// Configuration module
+#[cfg(feature = "database")]
+pub mod config;
+
+// Health check module
+#[cfg(feature = "database")]
+pub mod health;
+
 // Contract error enum for Soroban (only when not using database feature)
 #[cfg(not(feature = "database"))]
 #[contracterror]
