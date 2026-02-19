@@ -2,7 +2,9 @@ name: CI/CD Pipeline
 
 on:
   pull_request:
-    branches: [main, develop]
+    # only run CI for pull requests targeting the development branch;
+    # explicit check below rejects attempts to open PRs against main
+    branches: [develop]
   push:
     branches: [main]
   workflow_dispatch:
@@ -13,6 +15,18 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  check-target:
+    name: Ensure PRs target develop
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Verify base branch
+        run: |
+          echo "Base branch is ${{ github.event.pull_request.base.ref }}"
+          if [ "${{ github.event.pull_request.base.ref }}" = "main" ]; then
+            echo "🚫 Pull requests must target the 'develop' branch, not 'main'."
+            exit 1
+          fi
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -61,6 +75,9 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Check formatting
+        run: cargo fmt -- --check
 
       - name: Run tests
         env:
@@ -129,13 +146,13 @@ jobs:
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          format: 'sarif'
-          output: 'trivy-results.sarif'
+          format: "sarif"
+          output: "trivy-results.sarif"
 
       - name: Upload Trivy results
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: 'trivy-results.sarif'
+          sarif_file: "trivy-results.sarif"
 
   deploy-staging:
     name: Deploy to Staging

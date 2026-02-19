@@ -29,3 +29,19 @@ jobs:
           echo "✅ Dockerfile validated"
           echo "✅ Cargo.toml found"
           echo "✅ Workflow configuration valid"
+
+      - name: Verify branch protection
+        uses: actions/github-script@v6
+        with:
+          script: |
+            try {
+              const resp = await github.repos.getBranchProtection({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                branch: 'develop'
+              });
+              console.log('Branch "develop" is protected.');
+            } catch (err) {
+              console.error('Branch protection for "develop" is not set.');
+              process.exit(1);
+            }
