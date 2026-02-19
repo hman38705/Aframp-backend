@@ -221,12 +221,8 @@ pub fn json_error_response(
 ) -> (StatusCode, Json<ErrorResponse>) {
     let message = message.into();
     let error_response = match status.as_u16() {
-        400..=499 => ErrorResponse::validation_error(
-            request_id,
-            "request",
-            &message,
-        )
-        .with_details(serde_json::json!({ "message": message })),
+        400..=499 => ErrorResponse::validation_error(request_id, "request", &message)
+            .with_details(serde_json::json!({ "message": message })),
         _ => ErrorResponse::internal_error(request_id),
     };
 
@@ -249,9 +245,9 @@ mod tests {
 
         let error_response = ErrorResponse::from_app_error(&app_error);
 
-        assert_eq!(error_response.error, ErrorCode::InsufficientAfriBalance);
+        assert_eq!(error_response.error, ErrorCode::InsufficientCngnBalance);
         assert_eq!(error_response.request_id, Some("req_123".to_string()));
-        assert!(error_response.message.contains("Insufficient AFRI balance"));
+        assert!(error_response.message.contains("Insufficient CNGN balance"));
     }
 
     #[test]

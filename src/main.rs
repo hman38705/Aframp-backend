@@ -6,13 +6,21 @@ mod error;
 mod health;
 mod logging;
 mod middleware;
+mod payments;
 mod services;
 mod workers;
 
 // Imports
 use crate::health::{HealthChecker, HealthStatus};
 use crate::logging::init_tracing;
-use axum::{routing::{get, post, patch}, Json, Router};
+use crate::payments::factory::PaymentProviderFactory;
+use crate::payments::types::{
+    CustomerContact, Money, PaymentMethod, PaymentRequest as ProviderPaymentRequest, ProviderName,
+};
+use axum::{
+    routing::{get, patch, post},
+    Json, Router,
+};
 use cache::{init_cache_pool, CacheConfig, RedisCache};
 use chains::stellar::client::StellarClient;
 use chains::stellar::config::StellarConfig;
@@ -21,6 +29,7 @@ use dotenv::dotenv;
 use middleware::logging::{request_logging_middleware, UuidRequestId};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
+use std::str::FromStr;
 use tokio::signal;
 use tokio::sync::watch;
 use tower::ServiceBuilder;
@@ -198,7 +207,9 @@ async fn main() -> anyhow::Result<()> {
                                 );
                             }
                         }
-                        Err(e) => info!(error = %e, "⚠️  Account exists but couldn't fetch details"),
+                        Err(e) => {
+                            info!(error = %e, "⚠️  Account exists but couldn't fetch details")
+                        }
                     }
                 } else {
                     info!(
@@ -234,11 +245,16 @@ async fn main() -> anyhow::Result<()> {
                 max_retries = monitor_config.max_retries,
                 "Starting Stellar transaction monitoring worker"
             );
-            let worker =
-                workers::transaction_monitor::TransactionMonitorWorker::new(pool, client, monitor_config);
+            let worker = workers::transaction_monitor::TransactionMonitorWorker::new(
+                pool,
+                client,
+                monitor_config,
+            );
             monitor_handle = Some(tokio::spawn(worker.run(worker_shutdown_rx)));
         } else {
-            info!("Skipping Stellar transaction monitor worker (missing db pool or stellar client)");
+            info!(
+                "Skipping Stellar transaction monitor worker (missing db pool or stellar client)"
+            );
         }
     } else {
         info!("Stellar transaction monitor worker disabled (TX_MONITOR_ENABLED=false)");
@@ -252,7 +268,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/health/ready", get(readiness))
         .route("/health/live", get(liveness))
         .route("/api/stellar/account/{address}", get(get_stellar_account))
-        .route("/api/trustlines/operations", post(create_trustline_operation))
+        .route(
+            "/api/trustlines/operations",
+            post(create_trustline_operation),
+        )
         .route(
             "/api/trustlines/operations/{id}",
             patch(update_trustline_operation_status),
@@ -262,24 +281,21 @@ async fn main() -> anyhow::Result<()> {
             get(list_trustline_operations_by_wallet),
         )
         .route("/api/fees/calculate", post(calculate_fee))
-        .route("/api/afri/trustlines/check", post(check_afri_trustline))
-        .route("/api/afri/trustlines/create", post(create_afri_trustline))
-        .route("/api/afri/trustlines/verify", post(verify_afri_trustline))
-        .route(
-            "/api/afri/trustlines/min-balance",
-            post(validate_afri_trustline_balance),
-        )
         .route("/api/cngn/trustlines/check", post(check_cngn_trustline))
-        .route("/api/cngn/trustlines/preflight", post(preflight_cngn_trustline))
+        .route(
+            "/api/cngn/trustlines/preflight",
+            post(preflight_cngn_trustline),
+        )
         .route("/api/cngn/trustlines/build", post(build_cngn_trustline))
         .route("/api/cngn/trustlines/submit", post(submit_cngn_trustline))
-        .route("/api/cngn/trustlines/retry/{id}", post(retry_cngn_trustline))
+        .route(
+            "/api/cngn/trustlines/retry/{id}",
+            post(retry_cngn_trustline),
+        )
         .route("/api/cngn/payments/build", post(build_cngn_payment))
         .route("/api/cngn/payments/sign", post(sign_cngn_payment))
         .route("/api/cngn/payments/submit", post(submit_cngn_payment))
-        .route("/api/afri/payments/build", post(build_afri_payment))
-        .route("/api/afri/payments/sign", post(sign_afri_payment))
-        .route("/api/afri/payments/submit", post(submit_afri_payment))
+        .route("/api/payments/initiate", post(initiate_payment))
         .with_state(AppState {
             db_pool,
             redis_cache,
@@ -656,32 +672,16 @@ struct CngnPaymentSubmitResponse {
 }
 
 #[derive(Debug, Deserialize)]
-struct PaymentBuildRequest {
-    source: String,
-    destination: String,
+struct InitiatePaymentApiRequest {
     amount: String,
-    asset_code: String,
-    asset_issuer: String,
-    memo: Option<crate::services::afri_payment_builder::PaymentMemo>,
-    fee_stroops: Option<u64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PaymentSignRequest {
-    draft: crate::services::afri_payment_builder::PaymentTransactionDraft,
-    secret_seed: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct PaymentSubmitRequest {
-    draft: crate::services::afri_payment_builder::PaymentTransactionDraft,
-    secret_seed: String,
-}
-
-#[derive(Debug, Serialize)]
-struct PaymentSubmitResponse {
-    signed: crate::services::afri_payment_builder::SignedPaymentTransaction,
-    horizon_response: serde_json::Value,
+    currency: Option<String>,
+    email: Option<String>,
+    phone: Option<String>,
+    payment_method: Option<String>,
+    callback_url: Option<String>,
+    transaction_reference: String,
+    metadata: Option<serde_json::Value>,
+    provider: Option<String>,
 }
 
 async fn create_trustline_operation(
@@ -690,16 +690,21 @@ async fn create_trustline_operation(
     Json(payload): Json<TrustlineOperationRequest>,
 ) -> Result<
     Json<crate::database::trustline_operation_repository::TrustlineOperation>,
-    (axum::http::StatusCode, Json<crate::middleware::error::ErrorResponse>),
+    (
+        axum::http::StatusCode,
+        Json<crate::middleware::error::ErrorResponse>,
+    ),
 > {
     let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
     let pool = match state.db_pool.as_ref() {
         Some(pool) => pool,
-        None => return Err(crate::middleware::error::json_error_response(
-            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            "Database disabled by configuration",
-            request_id,
-        )),
+        None => {
+            return Err(crate::middleware::error::json_error_response(
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "Database disabled by configuration",
+                request_id,
+            ))
+        }
     };
 
     if payload.wallet_address.trim().is_empty() {
@@ -739,15 +744,118 @@ async fn create_trustline_operation(
         TrustlineOperationType::Remove => service.record_remove(input).await,
     };
 
-    result
-        .map(Json)
+    result.map(Json).map_err(|e| {
+        crate::middleware::error::json_error_response(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            e.to_string(),
+            request_id,
+        )
+    })
+}
+
+async fn initiate_payment(
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<InitiatePaymentApiRequest>,
+) -> Result<
+    Json<crate::payments::types::PaymentResponse>,
+    (
+        axum::http::StatusCode,
+        Json<crate::middleware::error::ErrorResponse>,
+    ),
+> {
+    let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
+
+    if payload.transaction_reference.trim().is_empty() {
+        return Err(crate::middleware::error::json_error_response(
+            axum::http::StatusCode::BAD_REQUEST,
+            "transaction_reference is required",
+            request_id,
+        ));
+    }
+    if payload.email.as_deref().unwrap_or("").trim().is_empty() {
+        return Err(crate::middleware::error::json_error_response(
+            axum::http::StatusCode::BAD_REQUEST,
+            "email is required for payment initialization",
+            request_id,
+        ));
+    }
+
+    let payment_method = match payload
+        .payment_method
+        .as_deref()
+        .unwrap_or("card")
+        .trim()
+        .to_lowercase()
+        .as_str()
+    {
+        "card" => PaymentMethod::Card,
+        "bank_transfer" | "bank" => PaymentMethod::BankTransfer,
+        "mobile_money" => PaymentMethod::MobileMoney,
+        "ussd" => PaymentMethod::Ussd,
+        "wallet" => PaymentMethod::Wallet,
+        _ => PaymentMethod::Other,
+    };
+
+    let provider_request = ProviderPaymentRequest {
+        amount: Money {
+            amount: payload.amount,
+            currency: payload.currency.unwrap_or_else(|| "NGN".to_string()),
+        },
+        customer: CustomerContact {
+            email: payload.email,
+            phone: payload.phone,
+        },
+        payment_method,
+        callback_url: payload.callback_url,
+        transaction_reference: payload.transaction_reference,
+        metadata: payload.metadata,
+    };
+
+    let factory = PaymentProviderFactory::from_env().map_err(|e| {
+        crate::middleware::error::json_error_response(
+            axum::http::StatusCode::from_u16(e.http_status_code())
+                .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR),
+            e.user_message(),
+            request_id.clone(),
+        )
+    })?;
+
+    let provider = match payload.provider {
+        Some(provider_name) => {
+            let provider = ProviderName::from_str(&provider_name).map_err(|e| {
+                crate::middleware::error::json_error_response(
+                    axum::http::StatusCode::from_u16(e.http_status_code())
+                        .unwrap_or(axum::http::StatusCode::BAD_REQUEST),
+                    e.user_message(),
+                    request_id.clone(),
+                )
+            })?;
+            factory.get_provider(provider)
+        }
+        None => factory.get_default_provider(),
+    }
+    .map_err(|e| {
+        crate::middleware::error::json_error_response(
+            axum::http::StatusCode::from_u16(e.http_status_code())
+                .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR),
+            e.user_message(),
+            request_id.clone(),
+        )
+    })?;
+
+    let response = provider
+        .initiate_payment(provider_request)
+        .await
         .map_err(|e| {
             crate::middleware::error::json_error_response(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                e.to_string(),
-                request_id,
+                axum::http::StatusCode::from_u16(e.http_status_code())
+                    .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR),
+                e.user_message(),
+                request_id.clone(),
             )
-        })
+        })?;
+
+    Ok(Json(response))
 }
 
 async fn update_trustline_operation_status(
@@ -757,16 +865,21 @@ async fn update_trustline_operation_status(
     Json(payload): Json<TrustlineOperationStatusUpdate>,
 ) -> Result<
     Json<crate::database::trustline_operation_repository::TrustlineOperation>,
-    (axum::http::StatusCode, Json<crate::middleware::error::ErrorResponse>),
+    (
+        axum::http::StatusCode,
+        Json<crate::middleware::error::ErrorResponse>,
+    ),
 > {
     let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
     let pool = match state.db_pool.as_ref() {
         Some(pool) => pool,
-        None => return Err(crate::middleware::error::json_error_response(
-            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            "Database disabled by configuration",
-            request_id,
-        )),
+        None => {
+            return Err(crate::middleware::error::json_error_response(
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "Database disabled by configuration",
+                request_id,
+            ))
+        }
     };
 
     let uuid = Uuid::parse_str(&id).map_err(|e| {
@@ -807,16 +920,21 @@ async fn list_trustline_operations_by_wallet(
     axum::extract::Query(query): axum::extract::Query<TrustlineOperationQuery>,
 ) -> Result<
     Json<Vec<crate::database::trustline_operation_repository::TrustlineOperation>>,
-    (axum::http::StatusCode, Json<crate::middleware::error::ErrorResponse>),
+    (
+        axum::http::StatusCode,
+        Json<crate::middleware::error::ErrorResponse>,
+    ),
 > {
     let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
     let pool = match state.db_pool.as_ref() {
         Some(pool) => pool,
-        None => return Err(crate::middleware::error::json_error_response(
-            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            "Database disabled by configuration",
-            request_id,
-        )),
+        None => {
+            return Err(crate::middleware::error::json_error_response(
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "Database disabled by configuration",
+                request_id,
+            ))
+        }
     };
 
     if address.trim().is_empty() {
@@ -848,20 +966,26 @@ async fn calculate_fee(
     axum::extract::State(state): axum::extract::State<AppState>,
     headers: axum::http::HeaderMap,
     Json(payload): Json<FeeCalculationRequest>,
-) -> Result<Json<FeeCalculationResponse>, (axum::http::StatusCode, Json<crate::middleware::error::ErrorResponse>)> {
+) -> Result<
+    Json<FeeCalculationResponse>,
+    (
+        axum::http::StatusCode,
+        Json<crate::middleware::error::ErrorResponse>,
+    ),
+> {
     let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
     let pool = match state.db_pool.as_ref() {
         Some(pool) => pool,
-        None => return Err(crate::middleware::error::json_error_response(
-            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            "Database disabled by configuration",
-            request_id,
-        )),
+        None => {
+            return Err(crate::middleware::error::json_error_response(
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "Database disabled by configuration",
+                request_id,
+            ))
+        }
     };
 
-    let repo = crate::database::fee_structure_repository::FeeStructureRepository::new(
-        pool.clone(),
-    );
+    let repo = crate::database::fee_structure_repository::FeeStructureRepository::new(pool.clone());
     let service = crate::services::fee_structure::FeeStructureService::new(repo);
 
     let amount = crate::services::fee_structure::parse_amount(&payload.amount);
@@ -910,7 +1034,10 @@ async fn calculate_fee(
 fn app_error_response(
     err: crate::error::AppError,
     request_id: Option<String>,
-) -> (axum::http::StatusCode, Json<crate::middleware::error::ErrorResponse>) {
+) -> (
+    axum::http::StatusCode,
+    Json<crate::middleware::error::ErrorResponse>,
+) {
     let err = match request_id {
         Some(req_id) => err.with_request_id(req_id),
         None => err,
@@ -919,151 +1046,23 @@ fn app_error_response(
         .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
     (
         status,
-        Json(crate::middleware::error::ErrorResponse::from_app_error(&err)),
+        Json(crate::middleware::error::ErrorResponse::from_app_error(
+            &err,
+        )),
     )
-}
-
-async fn check_afri_trustline(
-    axum::extract::State(state): axum::extract::State<AppState>,
-    headers: axum::http::HeaderMap,
-    Json(payload): Json<TrustlineAccountRequest>,
-) -> Result<Json<crate::services::afri_trustline::TrustlineStatus>, (axum::http::StatusCode, Json<crate::middleware::error::ErrorResponse>)> {
-    let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
-    let stellar_client = match state.stellar_client.as_ref() {
-        Some(client) => client,
-        None => {
-            return Err(crate::middleware::error::json_error_response(
-                axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                "Stellar client disabled by configuration",
-                request_id,
-            ))
-        }
-    };
-
-    if payload.account_id.trim().is_empty() {
-        return Err(crate::middleware::error::json_error_response(
-            axum::http::StatusCode::BAD_REQUEST,
-            "account_id is required",
-            request_id,
-        ));
-    }
-
-    let manager =
-        crate::services::afri_trustline::TrustlineManager::new(stellar_client.clone());
-    manager
-        .check_trustline(&payload.account_id)
-        .await
-        .map(Json)
-        .map_err(|e| app_error_response(e, request_id))
-}
-
-async fn create_afri_trustline(
-    axum::extract::State(state): axum::extract::State<AppState>,
-    headers: axum::http::HeaderMap,
-    Json(payload): Json<TrustlineAccountRequest>,
-) -> Result<Json<crate::services::afri_trustline::TrustlineTransaction>, (axum::http::StatusCode, Json<crate::middleware::error::ErrorResponse>)> {
-    let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
-    let stellar_client = match state.stellar_client.as_ref() {
-        Some(client) => client,
-        None => {
-            return Err(crate::middleware::error::json_error_response(
-                axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                "Stellar client disabled by configuration",
-                request_id,
-            ))
-        }
-    };
-
-    if payload.account_id.trim().is_empty() {
-        return Err(crate::middleware::error::json_error_response(
-            axum::http::StatusCode::BAD_REQUEST,
-            "account_id is required",
-            request_id,
-        ));
-    }
-
-    let manager =
-        crate::services::afri_trustline::TrustlineManager::new(stellar_client.clone());
-    manager
-        .create_trustline_tx(&payload.account_id)
-        .await
-        .map(Json)
-        .map_err(|e| app_error_response(e, request_id))
-}
-
-async fn verify_afri_trustline(
-    axum::extract::State(state): axum::extract::State<AppState>,
-    headers: axum::http::HeaderMap,
-    Json(payload): Json<TrustlineAccountRequest>,
-) -> Result<Json<TrustlineVerificationResponse>, (axum::http::StatusCode, Json<crate::middleware::error::ErrorResponse>)> {
-    let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
-    let stellar_client = match state.stellar_client.as_ref() {
-        Some(client) => client,
-        None => {
-            return Err(crate::middleware::error::json_error_response(
-                axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                "Stellar client disabled by configuration",
-                request_id,
-            ))
-        }
-    };
-
-    if payload.account_id.trim().is_empty() {
-        return Err(crate::middleware::error::json_error_response(
-            axum::http::StatusCode::BAD_REQUEST,
-            "account_id is required",
-            request_id,
-        ));
-    }
-
-    let manager =
-        crate::services::afri_trustline::TrustlineManager::new(stellar_client.clone());
-    manager
-        .verify_trustline(&payload.account_id)
-        .await
-        .map(|verified| Json(TrustlineVerificationResponse { verified }))
-        .map_err(|e| app_error_response(e, request_id))
-}
-
-async fn validate_afri_trustline_balance(
-    axum::extract::State(state): axum::extract::State<AppState>,
-    headers: axum::http::HeaderMap,
-    Json(payload): Json<TrustlineAccountRequest>,
-) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<crate::middleware::error::ErrorResponse>)> {
-    let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
-    let stellar_client = match state.stellar_client.as_ref() {
-        Some(client) => client,
-        None => {
-            return Err(crate::middleware::error::json_error_response(
-                axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                "Stellar client disabled by configuration",
-                request_id,
-            ))
-        }
-    };
-
-    if payload.account_id.trim().is_empty() {
-        return Err(crate::middleware::error::json_error_response(
-            axum::http::StatusCode::BAD_REQUEST,
-            "account_id is required",
-            request_id,
-        ));
-    }
-
-    let manager =
-        crate::services::afri_trustline::TrustlineManager::new(stellar_client.clone());
-    manager
-        .validate_min_balance(&payload.account_id)
-        .await
-        .map(|_| Json(serde_json::json!({ "ok": true })))
-        .map_err(|e| app_error_response(e, request_id))
 }
 
 async fn check_cngn_trustline(
     axum::extract::State(state): axum::extract::State<AppState>,
     headers: axum::http::HeaderMap,
     Json(payload): Json<TrustlineAccountRequest>,
-) -> Result<Json<crate::chains::stellar::trustline::TrustlineStatus>, (axum::http::StatusCode, Json<crate::middleware::error::ErrorResponse>)> {
+) -> Result<
+    Json<crate::chains::stellar::trustline::TrustlineStatus>,
+    (
+        axum::http::StatusCode,
+        Json<crate::middleware::error::ErrorResponse>,
+    ),
+> {
     let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
     let stellar_client = match state.stellar_client.as_ref() {
         Some(client) => client,
@@ -1084,7 +1083,8 @@ async fn check_cngn_trustline(
         ));
     }
 
-    let manager = crate::chains::stellar::trustline::CngnTrustlineManager::new(stellar_client.clone());
+    let manager =
+        crate::chains::stellar::trustline::CngnTrustlineManager::new(stellar_client.clone());
     manager
         .check_trustline(&payload.account_id)
         .await
@@ -1096,7 +1096,13 @@ async fn preflight_cngn_trustline(
     axum::extract::State(state): axum::extract::State<AppState>,
     headers: axum::http::HeaderMap,
     Json(payload): Json<TrustlineAccountRequest>,
-) -> Result<Json<crate::chains::stellar::trustline::TrustlinePreflight>, (axum::http::StatusCode, Json<crate::middleware::error::ErrorResponse>)> {
+) -> Result<
+    Json<crate::chains::stellar::trustline::TrustlinePreflight>,
+    (
+        axum::http::StatusCode,
+        Json<crate::middleware::error::ErrorResponse>,
+    ),
+> {
     let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
     let stellar_client = match state.stellar_client.as_ref() {
         Some(client) => client,
@@ -1117,7 +1123,8 @@ async fn preflight_cngn_trustline(
         ));
     }
 
-    let manager = crate::chains::stellar::trustline::CngnTrustlineManager::new(stellar_client.clone());
+    let manager =
+        crate::chains::stellar::trustline::CngnTrustlineManager::new(stellar_client.clone());
     manager
         .preflight_trustline_creation(&payload.account_id)
         .await
@@ -1129,7 +1136,13 @@ async fn build_cngn_trustline(
     axum::extract::State(state): axum::extract::State<AppState>,
     headers: axum::http::HeaderMap,
     Json(payload): Json<CngnTrustlineBuildRequest>,
-) -> Result<Json<CngnTrustlineBuildResponse>, (axum::http::StatusCode, Json<crate::middleware::error::ErrorResponse>)> {
+) -> Result<
+    Json<CngnTrustlineBuildResponse>,
+    (
+        axum::http::StatusCode,
+        Json<crate::middleware::error::ErrorResponse>,
+    ),
+> {
     let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
     let stellar_client = match state.stellar_client.as_ref() {
         Some(client) => client,
@@ -1150,7 +1163,8 @@ async fn build_cngn_trustline(
         ));
     }
 
-    let manager = crate::chains::stellar::trustline::CngnTrustlineManager::new(stellar_client.clone());
+    let manager =
+        crate::chains::stellar::trustline::CngnTrustlineManager::new(stellar_client.clone());
     let draft = manager
         .build_create_trustline_transaction(
             &payload.account_id,
@@ -1162,7 +1176,10 @@ async fn build_cngn_trustline(
 
     let mut operation_id = None;
     if let Some(pool) = state.db_pool.as_ref() {
-        let repo = crate::database::trustline_operation_repository::TrustlineOperationRepository::new(pool.clone());
+        let repo =
+            crate::database::trustline_operation_repository::TrustlineOperationRepository::new(
+                pool.clone(),
+            );
         let operation = repo
             .create_operation(
                 &draft.account_id,
@@ -1190,14 +1207,23 @@ async fn build_cngn_trustline(
         operation_id = Some(operation.id);
     }
 
-    Ok(Json(CngnTrustlineBuildResponse { draft, operation_id }))
+    Ok(Json(CngnTrustlineBuildResponse {
+        draft,
+        operation_id,
+    }))
 }
 
 async fn submit_cngn_trustline(
     axum::extract::State(state): axum::extract::State<AppState>,
     headers: axum::http::HeaderMap,
     Json(payload): Json<CngnTrustlineSubmitRequest>,
-) -> Result<Json<CngnTrustlineSubmitResponse>, (axum::http::StatusCode, Json<crate::middleware::error::ErrorResponse>)> {
+) -> Result<
+    Json<CngnTrustlineSubmitResponse>,
+    (
+        axum::http::StatusCode,
+        Json<crate::middleware::error::ErrorResponse>,
+    ),
+> {
     let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
     let stellar_client = match state.stellar_client.as_ref() {
         Some(client) => client,
@@ -1218,7 +1244,8 @@ async fn submit_cngn_trustline(
         ));
     }
 
-    let manager = crate::chains::stellar::trustline::CngnTrustlineManager::new(stellar_client.clone());
+    let manager =
+        crate::chains::stellar::trustline::CngnTrustlineManager::new(stellar_client.clone());
     let result = manager
         .submit_signed_trustline_xdr(&payload.signed_envelope_xdr)
         .await;
@@ -1227,12 +1254,8 @@ async fn submit_cngn_trustline(
         Ok(horizon_response) => {
             if let (Some(pool), Some(op_id)) = (state.db_pool.as_ref(), payload.operation_id) {
                 let repo = crate::database::trustline_operation_repository::TrustlineOperationRepository::new(pool.clone());
-                let tx_hash = horizon_response
-                    .get("hash")
-                    .and_then(|v| v.as_str());
-                let _ = repo
-                    .update_status(op_id, "completed", tx_hash, None)
-                    .await;
+                let tx_hash = horizon_response.get("hash").and_then(|v| v.as_str());
+                let _ = repo.update_status(op_id, "completed", tx_hash, None).await;
             }
             Ok(Json(CngnTrustlineSubmitResponse {
                 horizon_response,
@@ -1255,7 +1278,13 @@ async fn retry_cngn_trustline(
     axum::extract::State(state): axum::extract::State<AppState>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
     headers: axum::http::HeaderMap,
-) -> Result<Json<crate::database::trustline_operation_repository::TrustlineOperation>, (axum::http::StatusCode, Json<crate::middleware::error::ErrorResponse>)> {
+) -> Result<
+    Json<crate::database::trustline_operation_repository::TrustlineOperation>,
+    (
+        axum::http::StatusCode,
+        Json<crate::middleware::error::ErrorResponse>,
+    ),
+> {
     let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
     let pool = match state.db_pool.as_ref() {
         Some(pool) => pool,
@@ -1268,7 +1297,9 @@ async fn retry_cngn_trustline(
         }
     };
 
-    let repo = crate::database::trustline_operation_repository::TrustlineOperationRepository::new(pool.clone());
+    let repo = crate::database::trustline_operation_repository::TrustlineOperationRepository::new(
+        pool.clone(),
+    );
     repo.update_status(id, "pending", None, None)
         .await
         .map(Json)
@@ -1285,7 +1316,13 @@ async fn build_cngn_payment(
     axum::extract::State(state): axum::extract::State<AppState>,
     headers: axum::http::HeaderMap,
     Json(payload): Json<CngnPaymentBuildRequest>,
-) -> Result<Json<CngnPaymentBuildResponse>, (axum::http::StatusCode, Json<crate::middleware::error::ErrorResponse>)> {
+) -> Result<
+    Json<CngnPaymentBuildResponse>,
+    (
+        axum::http::StatusCode,
+        Json<crate::middleware::error::ErrorResponse>,
+    ),
+> {
     let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
     let stellar_client = match state.stellar_client.as_ref() {
         Some(client) => client,
@@ -1325,22 +1362,42 @@ async fn build_cngn_payment(
 
     let mut transaction_id = None;
     if let Some(pool) = state.db_pool.as_ref() {
-        let repo = crate::database::transaction_repository::TransactionRepository::new(pool.clone());
+        let repo =
+            crate::database::transaction_repository::TransactionRepository::new(pool.clone());
+
+        // Parse amounts as BigDecimal
+        use sqlx::types::BigDecimal;
+        use std::str::FromStr;
+        let amount_bd =
+            BigDecimal::from_str(&payload.amount).unwrap_or_else(|_| BigDecimal::from(0));
+
+        // Get asset code from draft (cNGN or XLM)
+        let asset_code = if draft.asset_code.is_empty() {
+            "XLM".to_string()
+        } else {
+            draft.asset_code.clone()
+        };
+
         let tx = repo
             .create_transaction(
                 &payload.source,
                 "payment",
-                &payload.amount,
-                None,
-                None,
-                Some(serde_json::json!({
+                &asset_code,
+                &asset_code,
+                amount_bd.clone(),
+                amount_bd.clone(),
+                BigDecimal::from(0), // cngn_amount
+                "pending",
+                None, // payment_provider
+                None, // payment_reference
+                serde_json::json!({
                     "asset_code": draft.asset_code,
                     "asset_issuer": draft.asset_issuer,
                     "destination": payload.destination,
                     "memo": draft.memo,
                     "stellar_tx_hash": draft.transaction_hash,
                     "unsigned_envelope_xdr": draft.unsigned_envelope_xdr
-                })),
+                }),
             )
             .await
             .map_err(|e| {
@@ -1350,7 +1407,7 @@ async fn build_cngn_payment(
                     request_id.clone(),
                 )
             })?;
-        transaction_id = Some(tx.id);
+        transaction_id = Some(tx.transaction_id.to_string());
     }
 
     Ok(Json(CngnPaymentBuildResponse {
@@ -1363,7 +1420,13 @@ async fn sign_cngn_payment(
     axum::extract::State(state): axum::extract::State<AppState>,
     headers: axum::http::HeaderMap,
     Json(payload): Json<CngnPaymentSignRequest>,
-) -> Result<Json<crate::chains::stellar::payment::SignedCngnPayment>, (axum::http::StatusCode, Json<crate::middleware::error::ErrorResponse>)> {
+) -> Result<
+    Json<crate::chains::stellar::payment::SignedCngnPayment>,
+    (
+        axum::http::StatusCode,
+        Json<crate::middleware::error::ErrorResponse>,
+    ),
+> {
     let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
     let stellar_client = match state.stellar_client.as_ref() {
         Some(client) => client,
@@ -1387,7 +1450,13 @@ async fn submit_cngn_payment(
     axum::extract::State(state): axum::extract::State<AppState>,
     headers: axum::http::HeaderMap,
     Json(payload): Json<CngnPaymentSubmitRequest>,
-) -> Result<Json<CngnPaymentSubmitResponse>, (axum::http::StatusCode, Json<crate::middleware::error::ErrorResponse>)> {
+) -> Result<
+    Json<CngnPaymentSubmitResponse>,
+    (
+        axum::http::StatusCode,
+        Json<crate::middleware::error::ErrorResponse>,
+    ),
+> {
     let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
     let stellar_client = match state.stellar_client.as_ref() {
         Some(client) => client,
@@ -1415,8 +1484,12 @@ async fn submit_cngn_payment(
 
     match submit_result {
         Ok(horizon_response) => {
-            if let (Some(pool), Some(tx_id)) = (state.db_pool.as_ref(), payload.transaction_id.as_deref()) {
-                let repo = crate::database::transaction_repository::TransactionRepository::new(pool.clone());
+            if let (Some(pool), Some(tx_id)) =
+                (state.db_pool.as_ref(), payload.transaction_id.as_deref())
+            {
+                let repo = crate::database::transaction_repository::TransactionRepository::new(
+                    pool.clone(),
+                );
                 let submitted_hash = horizon_response
                     .get("hash")
                     .and_then(|v| v.as_str())
@@ -1438,120 +1511,15 @@ async fn submit_cngn_payment(
             }))
         }
         Err(e) => {
-            if let (Some(pool), Some(tx_id)) = (state.db_pool.as_ref(), payload.transaction_id.as_deref()) {
-                let repo = crate::database::transaction_repository::TransactionRepository::new(pool.clone());
+            if let (Some(pool), Some(tx_id)) =
+                (state.db_pool.as_ref(), payload.transaction_id.as_deref())
+            {
+                let repo = crate::database::transaction_repository::TransactionRepository::new(
+                    pool.clone(),
+                );
                 let _ = repo.update_status(tx_id, "failed").await;
             }
             Err(app_error_response(e.into(), request_id))
         }
     }
-}
-
-async fn build_afri_payment(
-    axum::extract::State(state): axum::extract::State<AppState>,
-    headers: axum::http::HeaderMap,
-    Json(payload): Json<PaymentBuildRequest>,
-) -> Result<Json<crate::services::afri_payment_builder::PaymentTransactionDraft>, (axum::http::StatusCode, Json<crate::middleware::error::ErrorResponse>)> {
-    let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
-    let stellar_client = match state.stellar_client.as_ref() {
-        Some(client) => client,
-        None => {
-            return Err(crate::middleware::error::json_error_response(
-                axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                "Stellar client disabled by configuration",
-                request_id,
-            ))
-        }
-    };
-
-    let builder =
-        crate::services::afri_payment_builder::AfriPaymentBuilder::new(stellar_client.clone());
-    let operation = crate::services::afri_payment_builder::PaymentOperation {
-        source: payload.source,
-        destination: payload.destination,
-        amount: payload.amount,
-        asset_code: payload.asset_code,
-        asset_issuer: payload.asset_issuer,
-    };
-
-    builder
-        .build_payment(
-            operation,
-            payload
-                .memo
-                .unwrap_or(crate::services::afri_payment_builder::PaymentMemo::None),
-            payload.fee_stroops,
-        )
-        .await
-        .map(Json)
-        .map_err(|e| app_error_response(e, request_id))
-}
-
-async fn sign_afri_payment(
-    axum::extract::State(state): axum::extract::State<AppState>,
-    headers: axum::http::HeaderMap,
-    Json(payload): Json<PaymentSignRequest>,
-) -> Result<Json<crate::services::afri_payment_builder::SignedPaymentTransaction>, (axum::http::StatusCode, Json<crate::middleware::error::ErrorResponse>)> {
-    let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
-    let stellar_client = match state.stellar_client.as_ref() {
-        Some(client) => client,
-        None => {
-            return Err(crate::middleware::error::json_error_response(
-                axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                "Stellar client disabled by configuration",
-                request_id,
-            ))
-        }
-    };
-
-    let builder =
-        crate::services::afri_payment_builder::AfriPaymentBuilder::new(stellar_client.clone());
-    builder
-        .sign_transaction(payload.draft, &payload.secret_seed)
-        .map(Json)
-        .map_err(|e| app_error_response(e, request_id))
-}
-
-async fn submit_afri_payment(
-    axum::extract::State(state): axum::extract::State<AppState>,
-    headers: axum::http::HeaderMap,
-    Json(payload): Json<PaymentSubmitRequest>,
-) -> Result<Json<PaymentSubmitResponse>, (axum::http::StatusCode, Json<crate::middleware::error::ErrorResponse>)> {
-    let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
-    let stellar_client = match state.stellar_client.as_ref() {
-        Some(client) => client,
-        None => {
-            return Err(crate::middleware::error::json_error_response(
-                axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                "Stellar client disabled by configuration",
-                request_id,
-            ))
-        }
-    };
-
-    let builder =
-        crate::services::afri_payment_builder::AfriPaymentBuilder::new(stellar_client.clone());
-    let signed = builder
-        .sign_transaction(payload.draft, &payload.secret_seed)
-        .map_err(|e| app_error_response(e, request_id.clone()))?;
-
-    let horizon_response = stellar_client
-        .submit_transaction_xdr(&signed.envelope_xdr)
-        .await
-        .map_err(|e| {
-            app_error_response(
-                crate::error::AppError::new(crate::error::AppErrorKind::External(
-                    crate::error::ExternalError::Blockchain {
-                        message: e.to_string(),
-                        is_retryable: true,
-                    },
-                )),
-                request_id,
-            )
-        })?;
-
-    Ok(Json(PaymentSubmitResponse {
-        signed,
-        horizon_response,
-    }))
 }

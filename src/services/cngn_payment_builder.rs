@@ -1,4 +1,4 @@
-//! AFRI payment transaction builder
+//! cNGN payment transaction builder
 //! Builds payment transaction drafts, calculates fees, supports memo, and signs payloads.
 
 use crate::chains::stellar::client::StellarClient;
@@ -59,13 +59,13 @@ pub struct SignedPaymentTransaction {
     pub envelope_xdr: String,
 }
 
-/// AFRI payment transaction builder
-pub struct AfriPaymentBuilder {
+/// cNGN payment transaction builder
+pub struct CngnPaymentBuilder {
     stellar_client: StellarClient,
     base_fee_stroops: u64,
 }
 
-impl AfriPaymentBuilder {
+impl CngnPaymentBuilder {
     pub fn new(stellar_client: StellarClient) -> Self {
         Self {
             stellar_client,

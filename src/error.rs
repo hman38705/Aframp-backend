@@ -10,19 +10,19 @@ use std::fmt;
 #[cfg(feature = "database")]
 use crate::chains::stellar::errors::StellarError;
 
-/// AFRI-specific error codes for programmatic handling
+/// CNGN-specific error codes for programmatic handling
 #[cfg(feature = "database")]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ErrorCode {
     // Domain errors (4xx)
     #[serde(rename = "TRUSTLINE_REQUIRED")]
     TrustlineRequired,
-    #[serde(rename = "INSUFFICIENT_AFRI_BALANCE")]
-    InsufficientAfriBalance,
+    #[serde(rename = "INSUFFICIENT_CNGN_BALANCE")]
+    InsufficientCngnBalance,
     #[serde(rename = "RATE_EXPIRED")]
     RateExpired,
-    #[serde(rename = "INVALID_AFRI_AMOUNT")]
-    InvalidAfriAmount,
+    #[serde(rename = "INVALID_CNGN_AMOUNT")]
+    InvalidCngnAmount,
     #[serde(rename = "TRUSTLINE_CREATION_FAILED")]
     TrustlineCreationFailed,
     #[serde(rename = "TRANSACTION_NOT_FOUND")]
@@ -67,9 +67,9 @@ pub enum ErrorCode {
 #[cfg(feature = "database")]
 #[derive(Debug, Clone)]
 pub enum DomainError {
-    /// User doesn't have enough AFRI tokens for the operation
+    /// User doesn't have enough CNGN tokens for the operation
     InsufficientBalance { available: String, required: String },
-    /// Wallet hasn't established AFRI trustline
+    /// Wallet hasn't established CNGN trustline
     TrustlineNotFound {
         wallet_address: String,
         asset: String,
@@ -220,9 +220,9 @@ impl AppError {
     pub fn error_code(&self) -> ErrorCode {
         match &self.kind {
             AppErrorKind::Domain(err) => match err {
-                DomainError::InsufficientBalance { .. } => ErrorCode::InsufficientAfriBalance,
+                DomainError::InsufficientBalance { .. } => ErrorCode::InsufficientCngnBalance,
                 DomainError::TrustlineNotFound { .. } => ErrorCode::TrustlineRequired,
-                DomainError::InvalidAmount { .. } => ErrorCode::InvalidAfriAmount,
+                DomainError::InvalidAmount { .. } => ErrorCode::InvalidCngnAmount,
                 DomainError::TransactionNotFound { .. } => ErrorCode::TransactionNotFound,
                 DomainError::WalletNotFound { .. } => ErrorCode::WalletNotFound,
                 DomainError::RateExpired { .. } => ErrorCode::RateExpired,
@@ -253,7 +253,7 @@ impl AppError {
                     required,
                 } => {
                     format!(
-                        "Insufficient AFRI balance. Available: {}, Required: {}",
+                        "Insufficient CNGN balance. Available: {}, Required: {}",
                         available, required
                     )
                 }
@@ -439,12 +439,13 @@ impl From<StellarError> for AppError {
                     is_retryable: true,
                 })
             }
-            SE::InsufficientXlm { available, required } => {
-                AppErrorKind::Domain(DomainError::InsufficientBalance {
-                    available,
-                    required,
-                })
-            }
+            SE::InsufficientXlm {
+                available,
+                required,
+            } => AppErrorKind::Domain(DomainError::InsufficientBalance {
+                available,
+                required,
+            }),
             SE::TrustlineAlreadyExists { address, asset } => {
                 AppErrorKind::Domain(DomainError::DuplicateTransaction {
                     transaction_id: format!("trustline:{}:{}", address, asset),
@@ -485,8 +486,8 @@ mod tests {
         }));
 
         assert_eq!(error.status_code(), 422);
-        assert_eq!(error.error_code(), ErrorCode::InsufficientAfriBalance);
-        assert!(error.user_message().contains("Insufficient AFRI balance"));
+        assert_eq!(error.error_code(), ErrorCode::InsufficientCngnBalance);
+        assert!(error.user_message().contains("Insufficient CNGN balance"));
         assert!(!error.is_retryable());
     }
 

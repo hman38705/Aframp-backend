@@ -124,7 +124,7 @@ cargo build --release --features database
 ```
 src/
 ├── chains/              # Blockchain integrations
-│   └── stellar/         # Stellar blockchain (AFRI stablecoin)
+│   └── stellar/         # Stellar blockchain (CNGN stablecoin)
 │       ├── client.rs    # Horizon API client
 │       ├── config.rs    # Network configuration
 │       ├── errors.rs    # Error types
@@ -150,7 +150,7 @@ examples/                # Example code
 
 ### Key Components
 
-1. **Stellar Integration**: Primary blockchain for AFRI stablecoin
+1. **Stellar Integration**: Primary blockchain for CNGN stablecoin
 2. **Database Layer**: Repository pattern with SQLx
 3. **Soroban Contracts**: Smart contracts for escrow functionality
 4. **Middleware**: Logging, error handling, rate limiting
@@ -203,7 +203,7 @@ Use clear, descriptive commit messages:
 
 ```bash
 git add .
-git commit -m "feat: add AFRI balance checking endpoint
+git commit -m "feat: add CNGN balance checking endpoint
 
 - Implement balance retrieval from Stellar
 - Add input validation
@@ -458,9 +458,9 @@ Describe testing done
 - Cache frequently accessed data
 - Log all blockchain operations
 
-### AFRI Stablecoin Operations
+### CNGN Stablecoin Operations
 
-When working with AFRI:
+When working with CNGN:
 - Verify trustline exists before transfers
 - Validate asset issuer address
 - Use string types for amounts (avoid float precision issues)
@@ -567,4 +567,4 @@ Contributors are recognized in:
 
 **Thank you for contributing to Aframp Backend!**
 
-Together, we're building the future of African crypto infrastructure powered by AFRI stablecoin and Rust.
+Together, we're building the future of African crypto infrastructure powered by CNGN stablecoin and Rust.

@@ -35,7 +35,7 @@ use tracing::info;
 #[derive(Debug, Deserialize)]
 struct OnrampRequest {
     wallet_address: String,
-    afri_amount: f64,
+    cngn_amount: f64,
     currency: String,
 }
 
@@ -54,7 +54,7 @@ async fn onramp_handler(
     // Log the incoming request with masked wallet
     info!(
         wallet = %mask_wallet_address(&request.wallet_address),
-        amount = %request.afri_amount,
+        amount = %request.cngn_amount,
         currency = %request.currency,
         "Onramp request received"
     );
@@ -70,10 +70,10 @@ async fn onramp_handler(
     }
 
     // Validate amount
-    if request.afri_amount <= 0.0 {
+    if request.cngn_amount <= 0.0 {
         return Err(AppError::new(AppErrorKind::Validation(
             ValidationError::InvalidAmount {
-                amount: request.afri_amount.to_string(),
+                amount: request.cngn_amount.to_string(),
                 reason: "Amount must be positive".to_string(),
             },
         )));

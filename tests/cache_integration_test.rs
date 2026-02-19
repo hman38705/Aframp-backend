@@ -224,8 +224,8 @@ mod cache_tests {
         let balance_key = wallet::BalanceKey::new(test_address);
         assert_eq!(balance_key.to_string(), "v1:wallet:balance:GA123456789");
 
-        let rate_key = exchange_rate::CurrencyPairKey::afri_rate("USD");
-        assert_eq!(rate_key.to_string(), "v1:rate:AFRI:USD");
+        let rate_key = exchange_rate::CurrencyPairKey::cngn_rate("USD");
+        assert_eq!(rate_key.to_string(), "v1:rate:CNGN:USD");
 
         let trustline_key = wallet::TrustlineKey::new(test_address);
         assert_eq!(trustline_key.to_string(), "v1:wallet:trustline:GA123456789");

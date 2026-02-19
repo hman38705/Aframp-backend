@@ -2,7 +2,7 @@
 
 ## Overview
 
-Professional implementation of Stellar blockchain connectivity for AFRI stablecoin operations has been successfully completed. This provides the foundation for all AFRI stablecoin operations.
+Professional implementation of Stellar blockchain connectivity for CNGN stablecoin operations has been successfully completed. This provides the foundation for all CNGN stablecoin operations.
 
 ## ✅ All Acceptance Criteria Met
 
@@ -21,7 +21,7 @@ Professional implementation of Stellar blockchain connectivity for AFRI stableco
 ### 3. Account Operations
 - ✅ Fetch account - Get account details by wallet address
 - ✅ Validate account - Check if address exists on Stellar
-- ✅ Get balances - Retrieve all asset balances (XLM, AFRI, others)
+- ✅ Get balances - Retrieve all asset balances (XLM, CNGN, others)
 - ✅ Account exists check - Quick validation without fetching full details
 
 ### 4. Connection Health
@@ -74,7 +74,7 @@ println!("Horizon healthy: {}", health.is_healthy);
 let exists = client.account_exists("GD5DJQDQKNR7DSXJVNJTV3P5JJH4KJVTI2JZNYUYIIKHTDNJQXECM4JQ").await?;
 let account = client.get_account("GD5DJQDQKNR7DSXJVNJTV3P5JJH4KJVTI2JZNYUYIIKHTDNJQXECM4JQ").await?;
 let balances = client.get_balances("GD5DJQDQKNR7DSXJVNJTV3P5JJH4KJVTI2JZNYUYIIKHTDNJQXECM4JQ").await?;
-let afri_balance = client.get_afri_balance("GD5DJQDQKNR7DSXJVNJTV3P5JJH4KJVTI2JZNYUYIIKHTDNJQXECM4JQ").await?;
+let cngn_balance = client.get_cngn_balance("GD5DJQDQKNR7DSXJVNJTV3P5JJH4KJVTI2JZNYUYIIKHTDNJQXECM4JQ", issuer_opt).await?;
 ```
 
 ## 🧪 Testing Status
@@ -89,7 +89,7 @@ All tests implemented and passing:
 - ✅ Account existence checking
 - ✅ Account fetching with proper error handling
 - ✅ Balance retrieval
-- ✅ AFRI balance extraction
+- ✅ CNGN balance extraction
 
 ## 📊 Performance Characteristics
 
@@ -130,9 +130,9 @@ Comprehensive logging at all levels:
 ## 🔄 Ready for Next Phase
 
 This implementation provides the solid foundation needed for:
-1. **Trustline Management**: AFRI token trustlines
+1. **Trustline Management**: CNGN token trustlines
 2. **Transaction Operations**: Building and submitting transactions
-3. **Payment Processing**: AFRI transfers
+3. **Payment Processing**: CNGN transfers
 4. **Token Management**: Minting/burning operations
 
 ## 📋 Implementation Quality
@@ -147,4 +147,4 @@ This implementation provides the solid foundation needed for:
 ---
 
 **Status**: ✅ COMPLETE AND PRODUCTION READY
-**Next Issue**: Trustline Management for AFRI stablecoin
+**Next Issue**: Trustline Management for CNGN stablecoin

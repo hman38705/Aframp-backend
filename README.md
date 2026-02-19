@@ -4,18 +4,19 @@ Payment infrastructure for African crypto onramp/offramp. Built with Rust for sp
 
 ## What It Does
 
-Aframp connects African payment systems (M-Pesa, MTN Money, Airtel Money) with blockchain networks using African stablecoins. Users connect their wallet, buy/sell crypto with AFRI stablecoins, and pay bills—all without creating an account.
+Aframp connects African payment systems (M-Pesa, MTN Money, Airtel Money) with blockchain networks using African stablecoins. Users connect their wallet, buy/sell crypto with CNGN stablecoins, and pay bills—all without creating an account.
 
 **Core features:**
 - Non-custodial crypto transactions
-- African stablecoin (AFRI) integration
+- African stablecoin (CNGN) integration
 - Multi-chain support (Stellar, Ethereum, Bitcoin)
 - Real-time payment processing
 - Bill payment services
 
-## About AFRI Stablecoin
+## About CNGN Stablecoin
 
-AFRI is a blockchain-based stable currency pegged to African currencies, designed specifically for the African market. Learn more at [afristablecoin.org](https://www.afristablecoin.org/).
+CNGN is a blockchain-based stable currency pegged to African currencies, designed specifically for the African market. Learn more at [afristablecoin.org](https://www.afristablecoin.org/).
+    [cngnstablecoin.org](https://cngn.co/)
 
 **Key benefits:**
 - Price stability pegged to local currencies
@@ -29,7 +30,7 @@ AFRI is a blockchain-based stable currency pegged to African currencies, designe
 - **Database**: PostgreSQL + SQLx
 - **Cache**: Redis
 - **Async Runtime**: Tokio
-- **Blockchain**: Stellar SDK (AFRI primary chain), web3, bitcoin crates
+- **Blockchain**: Stellar SDK (CNGN primary chain), web3, bitcoin crates
 - **Jobs**: Tokio tasks + Redis queues
 
 ## Project Structure
@@ -38,8 +39,8 @@ AFRI is a blockchain-based stable currency pegged to African currencies, designe
 src/
 ├── api/              # HTTP handlers and routes
 │   ├── wallet.rs     # Wallet connection endpoints
-│   ├── onramp.rs     # Buy AFRI/crypto endpoints
-│   ├── offramp.rs    # Sell AFRI/crypto endpoints
+│   ├── onramp.rs     # Buy CNGN/crypto endpoints
+│   ├── offramp.rs    # Sell CNGN/crypto endpoints
 │   └── bills.rs      # Bill payment endpoints
 ├── services/         # Business logic
 │   ├── transaction.rs
@@ -48,7 +49,7 @@ src/
 │   └── bill.rs
 ├── models/           # Database models
 ├── chains/           # Blockchain integrations
-│   ├── stellar/      # AFRI stablecoin & Stellar
+│   ├── stellar/      # CNGN stablecoin & Stellar
 │   ├── ethereum/
 │   └── bitcoin/
 ├── payments/         # Payment provider adapters
@@ -105,10 +106,10 @@ REDIS_URL=redis://localhost:6379
 STELLAR_NETWORK=testnet
 STELLAR_HORIZON_URL=https://horizon-testnet.stellar.org
 
-# AFRI Stablecoin Configuration
-AFRI_ASSET_CODE=AFRI
-AFRI_ISSUER_ADDRESS=GXXX...  # AFRI issuer account on Stellar
-AFRI_SUPPORTED_CURRENCIES=NGN,KES,ZAR,GHS  # African currencies
+# cNGN Stablecoin Configuration
+CNGN_ASSET_CODE=cNGN
+CNGN_ISSUER_ADDRESS=GXXX...  # cNGN issuer account on Stellar
+CNGN_SUPPORTED_CURRENCIES=NGN,KES,ZAR,GHS  # African currencies
 
 # Other Chains (optional)
 ETHEREUM_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/your-key
@@ -205,30 +206,30 @@ cargo test --features integration
 ### Wallet Operations
 
 ```bash
-# Get wallet balance (includes AFRI balance)
+# Get wallet balance (includes CNGN balance)
 GET /api/wallet/balance?address=GXXX...
 
 # Get supported chains
 GET /api/wallet/chains
 ```
 
-### Onramp (Buy AFRI/Crypto)
+### Onramp (Buy CNGN/Crypto)
 
 ```bash
-# Get quote for buying AFRI
+# Get quote for buying CNGN
 POST /api/onramp/quote
 {
   "from_currency": "KES",
-  "to_asset": "AFRI",
+  "to_asset": "CNGN",
   "amount": "5000"
 }
 
-# Initiate AFRI purchase
+# Initiate CNGN purchase
 POST /api/onramp/initiate
 {
   "wallet_address": "GXXX...",
   "from_currency": "KES",
-  "to_asset": "AFRI",
+  "to_asset": "CNGN",
   "amount": "5000",
   "payment_method": "mpesa"
 }
@@ -237,13 +238,13 @@ POST /api/onramp/initiate
 GET /api/onramp/status/:tx_id
 ```
 
-### Offramp (Sell AFRI/Crypto)
+### Offramp (Sell CNGN/Crypto)
 
 ```bash
-# Get quote for selling AFRI
+# Get quote for selling CNGN
 POST /api/offramp/quote
 {
-  "from_asset": "AFRI",
+  "from_asset": "CNGN",
   "to_currency": "KES",
   "amount": "100"
 }
@@ -252,7 +253,7 @@ POST /api/offramp/quote
 POST /api/offramp/initiate
 {
   "wallet_address": "GXXX...",
-  "from_asset": "AFRI",
+  "from_asset": "CNGN",
   "to_currency": "KES",
   "amount": "100",
   "withdrawal_method": "mpesa",
@@ -266,22 +267,22 @@ POST /api/offramp/initiate
 # Get bill providers
 GET /api/bills/providers?country=KE
 
-# Pay bill with AFRI
+# Pay bill with CNGN
 POST /api/bills/pay
 {
   "wallet_address": "GXXX...",
   "provider": "kplc",
   "account_number": "123456789",
   "amount": "50",
-  "asset": "AFRI"
+  "asset": "CNGN"
 }
 ```
 
 ### Rates & Fees
 
 ```bash
-# Get AFRI exchange rates
-GET /api/rates?from=KES&to=AFRI
+# Get CNGN exchange rates
+GET /api/rates?from=KES&to=CNGN
 
 # Get fee structure
 GET /api/fees
@@ -293,7 +294,7 @@ Full API docs available at `/api/docs` when server is running.
 
 Workers run as Tokio tasks:
 
-**Transaction Monitor** - Watches Stellar blockchain for AFRI confirmations  
+**Transaction Monitor** - Watches Stellar blockchain for CNGN confirmations  
 **Payment Processor** - Polls payment provider APIs  
 **Webhook Handler** - Processes incoming webhooks  
 **Settlement Worker** - Handles fund settlements  
@@ -322,29 +323,29 @@ Add new providers in `src/payments/providers/`.
 
 ## Blockchain Integration
 
-### Stellar (AFRI Stablecoin)
+### Stellar (CNGN Stablecoin)
 
-Primary chain for AFRI stablecoin transactions:
+Primary chain for CNGN stablecoin transactions:
 
 ```rust
-// Send AFRI payment
+// Send CNGN payment
 let payment = stellar_service.send_payment(
     &recipient_address,
-    "AFRI",
+    "CNGN",
     "100"
 ).await?;
 
-// Establish trustline for AFRI (first-time users)
+// Establish trustline for CNGN (first-time users)
 let trustline = stellar_service.create_trustline(
     &user_address,
-    "AFRI",
-    &afri_issuer_address
+    "CNGN",
+    &cngn_issuer_address
 ).await?;
 ```
 
 ### Ethereum
 
-For ERC-20 tokens and future AFRI ERC-20 bridge:
+For ERC-20 tokens and future CNGN ERC-20 bridge:
 
 ```rust
 let tx = ethereum_service.transfer_token(
@@ -358,39 +359,39 @@ let tx = ethereum_service.transfer_token(
 
 Lightning Network support planned.
 
-## AFRI Stablecoin Operations
+## CNGN Stablecoin Operations
 
 ### Trustline Management
 
-Before users can receive AFRI, they need to establish a trustline:
+Before users can receive CNGN, they need to establish a trustline:
 
 ```rust
 // Check if trustline exists
 let has_trustline = stellar_service
-    .check_trustline(&wallet_address, "AFRI", &afri_issuer)
+    .check_trustline(&wallet_address, "CNGN", &cngn_issuer)
     .await?;
 
 // Create trustline if needed
 if !has_trustline {
     stellar_service
-        .create_trustline(&wallet_address, "AFRI", &afri_issuer)
+        .create_trustline(&wallet_address, "CNGN", &cngn_issuer)
         .await?;
 }
 ```
 
 ### Currency Conversion
 
-AFRI maintains peg to local currencies:
+CNGN maintains peg to local currencies:
 
 ```rust
-// Convert NGN to AFRI
-let afri_amount = conversion_service
-    .convert("NGN", "AFRI", "50000")
+// Convert NGN to CNGN
+let cngn_amount = conversion_service
+    .convert("NGN", "CNGN", "50000")
     .await?;
 
-// Convert AFRI to KES
+// Convert CNGN to KES
 let kes_amount = conversion_service
-    .convert("AFRI", "KES", "100")
+    .convert("CNGN", "KES", "100")
     .await?;
 ```
 
@@ -423,7 +424,7 @@ All webhooks verify signatures before processing.
 - Users control private keys
 - Server never stores private keys
 
-**AFRI Security**
+**CNGN Security**
 - Trustline verification before transactions
 - Asset issuer validation
 - Transaction signing verification
@@ -450,7 +451,7 @@ RUST_LOG=warn cargo run   # Warnings only
 ```
 
 Key metrics tracked:
-- AFRI transaction success/failure rates
+- CNGN transaction success/failure rates
 - Payment provider response times
 - Stellar blockchain confirmation times
 - API endpoint latency
@@ -463,7 +464,7 @@ Production: Logs ship to CloudWatch (or your monitoring stack).
 **Database connection fails**  
 → Check PostgreSQL is running and credentials are correct
 
-**AFRI transaction fails**  
+**CNGN transaction fails**  
 → Verify trustline exists and account has XLM for fees
 
 **Trustline creation fails**  
@@ -478,8 +479,8 @@ Production: Logs ship to CloudWatch (or your monitoring stack).
 **SQLx compile errors**  
 → Run `cargo sqlx prepare` to generate query metadata
 
-**AFRI issuer not found**  
-→ Verify AFRI_ISSUER_ADDRESS is correctly set in .env
+**CNGN issuer not found**  
+→ Verify CNGN_ISSUER_ADDRESS is correctly set in .env
 
 ## Development Tools
 
@@ -529,7 +530,7 @@ Please read our [Code of Conduct](./CODE_OF_CONDUCT.md) to understand the standa
 
 ## Resources
 
-- [AFRI Stablecoin Documentation](https://www.afristablecoin.org/)
+- [CNGN Stablecoin Documentation](https://www.afristablecoin.org/)
 - [Stellar Developer Docs](https://developers.stellar.org/)
 - [Payment Provider APIs](./docs/PAYMENT_PROVIDERS.md)
 

@@ -86,8 +86,8 @@ pub mod exchange_rate {
             }
         }
 
-        pub fn afri_rate(to_currency: impl Into<String>) -> Self {
-            Self::new("AFRI", to_currency)
+        pub fn cngn_rate(to_currency: impl Into<String>) -> Self {
+            Self::new("CNGN", to_currency)
         }
     }
 
@@ -331,14 +331,14 @@ mod tests {
 
     #[test]
     fn test_exchange_rate_key() {
-        let key = exchange_rate::CurrencyPairKey::afri_rate("USD");
-        assert_eq!(key.to_string(), "v1:rate:AFRI:USD");
+        let key = exchange_rate::CurrencyPairKey::cngn_rate("USD");
+        assert_eq!(key.to_string(), "v1:rate:CNGN:USD");
     }
 
     #[test]
     fn test_conversion_key() {
-        let key = exchange_rate::ConversionKey::new("100.50", "AFRI", "USD");
-        assert_eq!(key.to_string(), "v1:rate:convert:100.50:AFRI:USD");
+        let key = exchange_rate::ConversionKey::new("100.50", "CNGN", "USD");
+        assert_eq!(key.to_string(), "v1:rate:convert:100.50:CNGN:USD");
     }
 
     #[test]

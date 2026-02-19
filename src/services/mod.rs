@@ -1,9 +1,9 @@
 //! Services module for business logic and integrations
 
 #[cfg(feature = "database")]
-pub mod afri_trustline;
+pub mod cngn_trustline;
 #[cfg(feature = "database")]
-pub mod afri_payment_builder;
+pub mod cngn_payment_builder;
 #[cfg(feature = "database")]
 pub mod conversion_audit;
 #[cfg(feature = "database")]

@@ -122,26 +122,31 @@ impl TransactionMonitorWorker {
     async fn process_pending_transactions(&self) -> anyhow::Result<()> {
         let tx_repo = TransactionRepository::new(self.pool.clone());
         let pending = tx_repo
-            .find_pending_payments_for_monitoring(self.config.pending_batch_size)
+            .find_pending_payments_for_monitoring(self.config.pending_batch_size as i32)
             .await?;
 
         for tx in pending {
-            let tx_hash = extract_tx_hash(tx.metadata.as_ref());
+            let tx_hash = extract_tx_hash(Some(&tx.metadata));
             if tx_hash.is_none() {
-                warn!(transaction_id = %tx.id, "pending transaction has no stellar hash in metadata");
+                warn!(transaction_id = %tx.transaction_id, "pending transaction has no stellar hash in metadata");
                 continue;
             }
             let tx_hash = tx_hash.unwrap_or_default();
 
             if is_timed_out(tx.updated_at, self.config.pending_timeout) {
-                self.handle_timeout(&tx.id, tx.metadata.clone()).await?;
+                self.handle_timeout(&tx.transaction_id.to_string(), Some(tx.metadata.clone()))
+                    .await?;
                 continue;
             }
 
             match self.stellar_client.get_transaction_by_hash(&tx_hash).await {
                 Ok(record) => {
-                    self.handle_horizon_status(&tx.id, record, tx.metadata.clone())
-                        .await?;
+                    self.handle_horizon_status(
+                        &tx.transaction_id.to_string(),
+                        record,
+                        Some(tx.metadata.clone()),
+                    )
+                    .await?;
                 }
                 Err(e) => {
                     let message = e.to_string().to_lowercase();
@@ -153,8 +158,12 @@ impl TransactionMonitorWorker {
                     {
                         continue;
                     }
-                    self.fail_or_retry(&tx.id, tx.metadata.clone(), &e.to_string())
-                        .await?;
+                    self.fail_or_retry(
+                        &tx.transaction_id.to_string(),
+                        Some(tx.metadata.clone()),
+                        &e.to_string(),
+                    )
+                    .await?;
                 }
             }
         }
@@ -307,15 +316,23 @@ impl TransactionMonitorWorker {
             let tx_repo = TransactionRepository::new(self.pool.clone());
             match tx_repo.find_by_id(memo).await {
                 Ok(Some(db_tx)) if db_tx.status == "pending" || db_tx.status == "processing" => {
-                    let mut metadata = db_tx.metadata.unwrap_or_else(|| json!({}));
+                    let mut metadata = db_tx.metadata.clone();
                     metadata["incoming_hash"] = json!(tx.hash);
                     metadata["incoming_ledger"] = json!(tx.ledger);
                     metadata["incoming_confirmed_at"] = json!(chrono::Utc::now().to_rfc3339());
                     tx_repo
-                        .update_status_with_metadata(&db_tx.id, "completed", metadata.clone())
+                        .update_status_with_metadata(
+                            &db_tx.transaction_id.to_string(),
+                            "completed",
+                            metadata.clone(),
+                        )
                         .await?;
-                    self.log_webhook_event(&db_tx.id, "stellar.incoming.matched", metadata)
-                        .await;
+                    self.log_webhook_event(
+                        &db_tx.transaction_id.to_string(),
+                        "stellar.incoming.matched",
+                        metadata,
+                    )
+                    .await;
                 }
                 Ok(_) => {
                     self.log_unmatched_incoming(memo, &tx).await;

@@ -10,7 +10,7 @@ I've created a separate test database environment for your Aframp backend projec
 - Renamed `migrations/004_indexes_and_constraints.sql` to `migrations/20260124000000_indexes_and_constraints.sql` for proper ordering
 - Fixed column name references (`transaction_type` → `type`, `amount` → `from_amount`, etc.)
 - Removed references to non-existent tables (`trustline_operations`, `exchange_rates`)
-- Fixed table references (`trustline_operations` → `afri_trustlines`)
+- Fixed table references (`trustline_operations` → `cngn_trustlines`)
 
 ### 2. Created Test Database Setup Script
 - **File**: `setup-test-db.sh`
@@ -73,7 +73,7 @@ The test database includes:
 - `users` - User accounts
 - `wallets` - Wallet addresses
 - `transactions` - Payment transactions
-- `afri_trustlines` - AFRI trustline records
+- `cngn_trustlines` - CNGN trustline records
 - `transaction_statuses` - Transaction status lookup
 - `payment_provider_configs` - Payment provider settings
 - `payment_methods` - User payment methods

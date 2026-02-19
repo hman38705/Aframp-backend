@@ -9,7 +9,7 @@ use crate::cache::{cache::Cache, cache::RedisCache, keys::wallet::TrustlineKey};
 #[cfg(feature = "cache")]
 use tracing::debug;
 
-/// Trustline entity for AFRI trustline tracking
+/// Trustline entity for CNGN trustline tracking
 #[derive(Debug, Clone, FromRow)]
 pub struct Trustline {
     pub id: String,

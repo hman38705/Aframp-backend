@@ -42,8 +42,8 @@ The database contains the following tables:
    - `user_id` (UUID) - Foreign key to users
    - `wallet_address` (VARCHAR) - Unique blockchain address
    - `chain` (TEXT) - Blockchain network (stellar, ethereum, bitcoin)
-   - `has_afri_trustline` (BOOLEAN) - Whether AFRI trustline exists
-   - `afri_balance` (NUMERIC) - Cached AFRI balance
+   - `has_cngn_trustline` (BOOLEAN) - Whether CNGN trustline exists
+   - `cngn_balance` (NUMERIC) - Cached CNGN balance
    - `last_balance_check` (TIMESTAMPTZ) - Last balance refresh timestamp
    - `created_at`, `updated_at` (TIMESTAMPTZ)
 
@@ -61,7 +61,7 @@ The database contains the following tables:
    - `metadata` (JSONB) - Provider-specific data
    - `created_at`, `updated_at` (TIMESTAMPTZ)
 
-4. **afri_trustlines** - AFRI trustline establishment
+4. **cngn_trustlines** - CNGN trustline establishment
    - `id` (UUID) - Primary key
    - `wallet_address` (VARCHAR) - Unique wallet address
    - `established_at` (TIMESTAMPTZ) - When trustline was established

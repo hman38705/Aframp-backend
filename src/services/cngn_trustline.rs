@@ -1,7 +1,7 @@
-//! AFRI Trustline Management for Stellar Network
+//! cNGN Trustline Management for Stellar Network
 //!
-//! Handles checking, creating, and verifying trustlines for the AFRI stablecoin.
-//! A trustline is required for Stellar accounts to hold custom assets like AFRI.
+//! Handles checking, creating, and verifying trustlines for the cNGN stablecoin.
+//! A trustline is required for Stellar accounts to hold custom assets like cNGN.
 
 use crate::chains::stellar::{
     client::StellarClient,
@@ -12,40 +12,39 @@ use crate::error::{AppError, AppErrorKind, DomainError, ExternalError};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio::time::{sleep, timeout};
-use tracing::{debug, info, warn, error};
+use tracing::{debug, error, info, warn};
 
 /// Stellar base reserve per entry (in XLM)
 const BASE_RESERVE_XLM: f64 = 0.5;
 const TRUSTLINE_RESERVE_XLM: f64 = 0.5;
 const MIN_BALANCE_BUFFER_XLM: f64 = 0.5; // Extra buffer for transaction fees
 
-/// Configuration for AFRI asset
+/// Configuration for cNGN asset
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AfriAssetConfig {
+pub struct CngnAssetConfig {
     pub asset_code: String,
     pub issuer_public_key: String,
     pub default_limit: Option<String>,
 }
 
-impl Default for AfriAssetConfig {
+impl Default for CngnAssetConfig {
     fn default() -> Self {
         Self {
-            asset_code: "AFRI".to_string(),
-            issuer_public_key: std::env::var("AFRI_ISSUER_PUBLIC_KEY")
-                .unwrap_or_else(|_| "GAFRI_ISSUER_PLACEHOLDER".to_string()),
+            asset_code: "cNGN".to_string(),
+            issuer_public_key: std::env::var("CNGN_ISSUER_PUBLIC_KEY")
+                .unwrap_or_else(|_| "GCNGN_ISSUER_PLACEHOLDER".to_string()),
             default_limit: None, // Unlimited by default
         }
     }
 }
 
-impl AfriAssetConfig {
+impl CngnAssetConfig {
     pub fn from_env() -> Self {
         Self {
-            asset_code: std::env::var("AFRI_ASSET_CODE")
-                .unwrap_or_else(|_| "AFRI".to_string()),
-            issuer_public_key: std::env::var("AFRI_ISSUER_PUBLIC_KEY")
-                .unwrap_or_else(|_| "GAFRI_ISSUER_PLACEHOLDER".to_string()),
-            default_limit: std::env::var("AFRI_DEFAULT_LIMIT").ok(),
+            asset_code: std::env::var("CNGN_ASSET_CODE").unwrap_or_else(|_| "cNGN".to_string()),
+            issuer_public_key: std::env::var("CNGN_ISSUER_PUBLIC_KEY")
+                .unwrap_or_else(|_| "GCNGN_ISSUER_PLACEHOLDER".to_string()),
+            default_limit: std::env::var("CNGN_DEFAULT_LIMIT").ok(),
         }
     }
 }
@@ -70,34 +69,34 @@ pub struct TrustlineTransaction {
     pub min_balance_required: String,
 }
 
-/// Manager for AFRI trustline operations
-pub struct TrustlineManager {
+/// Manager for cNGN trustline operations
+pub struct CngnTrustlineService {
     stellar_client: StellarClient,
-    afri_config: AfriAssetConfig,
+    cngn_config: CngnAssetConfig,
     verification_timeout: Duration,
     polling_interval: Duration,
 }
 
-impl TrustlineManager {
+impl CngnTrustlineService {
     pub fn new(stellar_client: StellarClient) -> Self {
         Self {
             stellar_client,
-            afri_config: AfriAssetConfig::from_env(),
+            cngn_config: CngnAssetConfig::from_env(),
             verification_timeout: Duration::from_secs(30),
             polling_interval: Duration::from_secs(2),
         }
     }
 
-    pub fn with_config(stellar_client: StellarClient, afri_config: AfriAssetConfig) -> Self {
+    pub fn with_config(stellar_client: StellarClient, cngn_config: CngnAssetConfig) -> Self {
         Self {
             stellar_client,
-            afri_config,
+            cngn_config,
             verification_timeout: Duration::from_secs(30),
             polling_interval: Duration::from_secs(2),
         }
     }
 
-    /// Check if an account has a trustline for AFRI
+    /// Check if an account has a trustline for cNGN
     ///
     /// # Arguments
     /// * `account_id` - Stellar account public key
@@ -107,30 +106,30 @@ impl TrustlineManager {
     pub async fn check_trustline(&self, account_id: &str) -> Result<TrustlineStatus, AppError> {
         debug!(
             account_id = %account_id,
-            asset_code = %self.afri_config.asset_code,
-            issuer = %self.afri_config.issuer_public_key,
+            asset_code = %self.cngn_config.asset_code,
+            issuer = %self.cngn_config.issuer_public_key,
             "Checking trustline"
         );
 
         // Fetch account info from Stellar
-        let account_info = self
-            .stellar_client
-            .get_account(account_id)
-            .await
-            .map_err(|e| match e {
-                StellarError::AccountNotFound { address } => {
-                    AppError::new(AppErrorKind::Domain(DomainError::WalletNotFound {
-                        wallet_address: address,
-                    }))
-                }
-                _ => AppError::from(e),
-            })?;
+        let account_info =
+            self.stellar_client
+                .get_account(account_id)
+                .await
+                .map_err(|e| match e {
+                    StellarError::AccountNotFound { address } => {
+                        AppError::new(AppErrorKind::Domain(DomainError::WalletNotFound {
+                            wallet_address: address,
+                        }))
+                    }
+                    _ => AppError::from(e),
+                })?;
 
-        // Search for AFRI trustline in balances
+        // Search for cNGN trustline in balances
         let trustline = Self::find_trustline(
             &account_info,
-            &self.afri_config.asset_code,
-            &self.afri_config.issuer_public_key,
+            &self.cngn_config.asset_code,
+            &self.cngn_config.issuer_public_key,
         );
 
         let status = if let Some(balance) = trustline {
@@ -218,7 +217,7 @@ impl TrustlineManager {
         Ok(())
     }
 
-    /// Create a trustline transaction for AFRI
+    /// Create a trustline transaction for cNGN
     ///
     /// Note: This prepares the transaction details but does not submit it.
     /// The actual transaction building and submission should be handled by
@@ -235,7 +234,7 @@ impl TrustlineManager {
     ) -> Result<TrustlineTransaction, AppError> {
         debug!(
             account_id = %account_id,
-            asset_code = %self.afri_config.asset_code,
+            asset_code = %self.cngn_config.asset_code,
             "Creating trustline transaction"
         );
 
@@ -267,9 +266,9 @@ impl TrustlineManager {
 
         let tx_details = TrustlineTransaction {
             account_id: account_id.to_string(),
-            asset_code: self.afri_config.asset_code.clone(),
-            issuer: self.afri_config.issuer_public_key.clone(),
-            limit: self.afri_config.default_limit.clone(),
+            asset_code: self.cngn_config.asset_code.clone(),
+            issuer: self.cngn_config.issuer_public_key.clone(),
+            limit: self.cngn_config.default_limit.clone(),
             estimated_fee: "0.00001".to_string(), // Base fee
             min_balance_required: format!("{:.7}", min_balance_required),
         };
@@ -301,8 +300,8 @@ impl TrustlineManager {
 
         let verify_future = async {
             let mut attempts = 0;
-            let max_attempts = (self.verification_timeout.as_secs()
-                / self.polling_interval.as_secs()) as u32;
+            let max_attempts =
+                (self.verification_timeout.as_secs() / self.polling_interval.as_secs()) as u32;
 
             loop {
                 attempts += 1;
@@ -393,16 +392,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_afri_config_default() {
-        let config = AfriAssetConfig::default();
-        assert_eq!(config.asset_code, "AFRI");
+    fn test_cngn_config_default() {
+        let config = CngnAssetConfig::default();
+        assert_eq!(config.asset_code, "cNGN");
         assert!(config.issuer_public_key.len() > 0);
     }
 
     #[test]
     fn test_calculate_required_balance() {
         let stellar_client = StellarClient::new(Default::default()).unwrap();
-        let manager = TrustlineManager::new(stellar_client);
+        let manager = CngnTrustlineService::new(stellar_client);
 
         // Account with 0 subentries
         let balance = manager.calculate_required_balance(0);

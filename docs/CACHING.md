@@ -65,9 +65,9 @@ All cache keys follow the pattern: `v1:{namespace}:{identifier}`
 
 ```
 v1:wallet:balance:GA123456789
-v1:rate:AFRI:USD
+v1:rate:CNGN:USD
 v1:wallet:trustline:GA123456789
-v1:rate:convert:100.50:AFRI:USD
+v1:rate:convert:100.50:CNGN:USD
 v1:auth:session:session_123
 v1:auth:rate_limit:user_123:login
 v1:bill:provider:provider_456
@@ -101,8 +101,8 @@ let cache = RedisCache::new(cache_pool);
 let repo = ExchangeRateRepository::with_cache(db_pool, cache);
 
 // Automatic caching on operations
-let rate = repo.get_current_rate("AFRI", "USD").await?; // Checks cache first
-repo.upsert_rate("AFRI", "USD", "0.85", None).await?; // Invalidates cache
+let rate = repo.get_current_rate("CNGN", "USD").await?; // Checks cache first
+repo.upsert_rate("CNGN", "USD", "0.85", None).await?; // Invalidates cache
 ```
 
 ### Type-Safe Keys
@@ -112,7 +112,7 @@ use aframp_backend::cache::keys::*;
 
 // Type-safe key generation
 let balance_key = wallet::BalanceKey::new("GA123456789");
-let rate_key = exchange_rate::CurrencyPairKey::afri_rate("USD");
+let rate_key = exchange_rate::CurrencyPairKey::cngn_rate("USD");
 
 // Keys implement Display for string conversion
 println!("{}", balance_key); // "v1:wallet:balance:GA123456789"
