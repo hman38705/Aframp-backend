@@ -8,18 +8,19 @@
 
 #[cfg(all(test, feature = "database", feature = "cache"))]
 mod tests {
-    use aframp_backend::cache::cache::{Cache, RedisCache};
-    use aframp_backend::cache::init_cache_pool;
-    use aframp_backend::cache::CacheConfig;
-    use aframp_backend::database::exchange_rate_repository::ExchangeRateRepository;
-    use aframp_backend::database::fee_structure_repository::{
+    use Bitmesh_backend::cache::cache::{Cache, RedisCache};
+    use Bitmesh_backend::cache::init_cache_pool;
+    use Bitmesh_backend::cache::CacheConfig;
+    use Bitmesh_backend::database::exchange_rate_repository::ExchangeRateRepository;
+    use Bitmesh_backend::database::fee_structure_repository::{
         FeeStructure, FeeStructureRepository,
     };
-    use aframp_backend::services::exchange_rate::{
+    use Bitmesh_backend::database::repository::Repository;
+    use Bitmesh_backend::services::exchange_rate::{
         ConversionDirection, ConversionRequest, ExchangeRateService, ExchangeRateServiceConfig,
     };
-    use aframp_backend::services::fee_structure::FeeStructureService;
-    use aframp_backend::services::rate_providers::FixedRateProvider;
+    use Bitmesh_backend::services::fee_structure::FeeStructureService;
+    use Bitmesh_backend::services::rate_providers::FixedRateProvider;
     use bigdecimal::BigDecimal;
     use chrono::Utc;
     use sqlx::PgPool;
@@ -42,8 +43,9 @@ mod tests {
 
         let config = CacheConfig {
             redis_url,
-            default_ttl: 60,
             max_connections: 5,
+            min_idle: 1,
+            ..CacheConfig::default()
         };
 
         let pool = init_cache_pool(config)
@@ -63,8 +65,10 @@ mod tests {
             min_fee: None,
             max_fee: None,
             currency: Some("NGN".to_string()),
-            valid_from: Utc::now() - chrono::Duration::days(1),
-            valid_until: None,
+            is_active: true,
+            effective_from: Utc::now() - chrono::Duration::days(1),
+            effective_until: None,
+            metadata: serde_json::json!({}),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -77,8 +81,10 @@ mod tests {
             min_fee: None,
             max_fee: None,
             currency: Some("NGN".to_string()),
-            valid_from: Utc::now() - chrono::Duration::days(1),
-            valid_until: None,
+            is_active: true,
+            effective_from: Utc::now() - chrono::Duration::days(1),
+            effective_until: None,
+            metadata: serde_json::json!({}),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -94,7 +100,7 @@ mod tests {
         let pool = setup_test_db().await;
         let cache = setup_test_cache().await;
 
-        let repo = ExchangeRateRepository::new(pool.clone()).with_cache(cache.clone());
+        let repo = ExchangeRateRepository::with_cache(pool.clone(), cache.clone());
         let provider = Arc::new(FixedRateProvider::new());
 
         let service = ExchangeRateService::new(repo, ExchangeRateServiceConfig::default())
@@ -116,7 +122,7 @@ mod tests {
         let pool = setup_test_db().await;
         let cache = setup_test_cache().await;
 
-        let repo = ExchangeRateRepository::new(pool.clone()).with_cache(cache.clone());
+        let repo = ExchangeRateRepository::with_cache(pool.clone(), cache.clone());
         let provider = Arc::new(FixedRateProvider::new());
 
         let service = ExchangeRateService::new(repo, ExchangeRateServiceConfig::default())
@@ -142,7 +148,7 @@ mod tests {
         // Setup fee structures
         setup_fee_structures(&pool).await;
 
-        let repo = ExchangeRateRepository::new(pool.clone()).with_cache(cache.clone());
+        let repo = ExchangeRateRepository::with_cache(pool.clone(), cache.clone());
         let provider = Arc::new(FixedRateProvider::new());
 
         let fee_repo = FeeStructureRepository::new(pool.clone());
@@ -188,7 +194,7 @@ mod tests {
         let pool = setup_test_db().await;
         let cache = setup_test_cache().await;
 
-        let repo = ExchangeRateRepository::new(pool.clone()).with_cache(cache.clone());
+        let repo = ExchangeRateRepository::with_cache(pool.clone(), cache.clone());
         let service = ExchangeRateService::new(repo, ExchangeRateServiceConfig::default())
             .with_cache(cache);
 
@@ -271,7 +277,7 @@ mod tests {
         let pool = setup_test_db().await;
         let cache = setup_test_cache().await;
 
-        let repo = ExchangeRateRepository::new(pool.clone()).with_cache(cache.clone());
+        let repo = ExchangeRateRepository::with_cache(pool.clone(), cache.clone());
         let provider = Arc::new(FixedRateProvider::new());
 
         let service = ExchangeRateService::new(repo, ExchangeRateServiceConfig::default())
@@ -285,10 +291,10 @@ mod tests {
         service.invalidate_cache("NGN", "cNGN").await.unwrap();
 
         // Verify cache was cleared
-        let cache_key = aframp_backend::cache::keys::exchange_rate::CurrencyPairKey::new(
+        let cache_key = Bitmesh_backend::cache::keys::exchange_rate::CurrencyPairKey::new(
             "NGN", "cNGN",
         );
-        let cached: Option<aframp_backend::services::exchange_rate::RateData> =
+        let cached: Option<Bitmesh_backend::services::exchange_rate::RateData> =
             cache.get(&cache_key.to_string()).await.unwrap();
         assert!(cached.is_none());
     }

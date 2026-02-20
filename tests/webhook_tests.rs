@@ -1,11 +1,10 @@
 #[cfg(test)]
 mod webhook_tests {
-    use super::*;
     use serde_json::json;
 
     #[test]
     fn test_webhook_error_display() {
-        use crate::services::webhook_processor::WebhookProcessorError;
+        use Bitmesh_backend::services::webhook_processor::WebhookProcessorError;
         
         let err = WebhookProcessorError::InvalidSignature;
         assert_eq!(err.to_string(), "Invalid signature");

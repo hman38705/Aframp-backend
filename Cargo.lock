@@ -24,6 +24,7 @@ dependencies = [
  "redis",
  "regex",
  "reqwest",
+ "rust_decimal",
  "serde",
  "serde_json",
  "sha2",
@@ -450,6 +451,7 @@ dependencies = [
  "num-bigint 0.4.6",
  "num-integer",
  "num-traits",
+ "serde",
 ]
 
 [[package]]

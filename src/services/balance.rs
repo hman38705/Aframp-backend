@@ -73,7 +73,7 @@ impl BalanceService {
         let cache_key = BalanceKey::new(address).to_string();
 
         if !force_refresh {
-            if let Ok(Some(cached)) = self.cache.get::<WalletBalance>(&cache_key).await {
+            if let Ok(Some(cached)) = self.cache.get(&cache_key).await {
                 debug!("Balance cache hit for {}", address);
                 return Ok(cached);
             }

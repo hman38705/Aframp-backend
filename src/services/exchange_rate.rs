@@ -7,7 +7,7 @@
 use crate::cache::cache::{Cache, RedisCache};
 use crate::cache::keys::exchange_rate::CurrencyPairKey;
 use crate::database::error::DatabaseError;
-use crate::database::exchange_rate_repository::{ExchangeRate, ExchangeRateRepository};
+use crate::database::exchange_rate_repository::ExchangeRateRepository;
 use crate::services::fee_structure::{FeeCalculationInput, FeeStructureService};
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
@@ -283,7 +283,11 @@ impl ExchangeRateService {
         // Invalidate cache
         if let Some(ref cache) = self.cache {
             let cache_key = CurrencyPairKey::new(from_currency, to_currency);
-            let _ = cache.delete(&cache_key.to_string()).await;
+            let _ = <RedisCache as Cache<RateData>>::delete(
+                cache,
+                &cache_key.to_string(),
+            )
+            .await;
         }
 
         debug!(
@@ -302,7 +306,9 @@ impl ExchangeRateService {
     ) -> ExchangeRateResult<()> {
         if let Some(ref cache) = self.cache {
             let cache_key = CurrencyPairKey::new(from_currency, to_currency);
-            cache.delete(&cache_key.to_string()).await.ok();
+            <RedisCache as Cache<RateData>>::delete(cache, &cache_key.to_string())
+                .await
+                .ok();
         }
         Ok(())
     }

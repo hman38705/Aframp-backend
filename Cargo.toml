@@ -8,7 +8,7 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["database", "cache"]
-database = [ "dep:tokio", "dep:async-trait", "dep:uuid", "dep:chrono", "dep:serde", "dep:serde_json", "dep:tracing", "dep:tracing-subscriber", "dep:axum", "dep:tower", "dep:tower-http", "dep:regex", "dep:http", "dep:sqlx", "dep:hmac", "dep:sha2", "dep:hex", "dep:bigdecimal", "dep:stellar-strkey", "dep:ed25519-dalek", "dep:stellar-xdr" ]
+database = [ "dep:tokio", "dep:async-trait", "dep:uuid", "dep:chrono", "dep:serde", "dep:serde_json", "dep:tracing", "dep:tracing-subscriber", "dep:axum", "dep:tower", "dep:tower-http", "dep:regex", "dep:http", "dep:sqlx", "dep:hmac", "dep:sha2", "dep:hex", "dep:bigdecimal", "dep:rust_decimal", "dep:stellar-strkey", "dep:ed25519-dalek", "dep:stellar-xdr" ]
 cache = ["dep:redis", "dep:bb8", "dep:bb8-redis", "database"]
 
 [dependencies]
@@ -35,7 +35,8 @@ base64 = "0.22.1"
 anyhow = "1.0.100"
 thiserror = "2.0.18"
 regex = { version = "1.12.2", optional = true }
-bigdecimal = { version = "0.4", optional = true }
+bigdecimal = { version = "0.4", features = ["serde"], optional = true }
+rust_decimal = { version = "1.36", optional = true }
 
 # Async runtime and utilities
 futures = "0.3.30"

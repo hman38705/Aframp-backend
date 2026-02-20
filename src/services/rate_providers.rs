@@ -8,8 +8,9 @@ use super::exchange_rate::{ExchangeRateError, ExchangeRateResult, RateData, Rate
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use chrono::Utc;
-use std::str::FromStr;
 use tracing::debug;
+#[cfg(test)]
+use std::str::FromStr;
 
 /// Fixed rate provider for cNGN/NGN 1:1 peg
 pub struct FixedRateProvider {
@@ -212,7 +213,7 @@ impl RateProvider for AggregatedRateProvider {
             AggregationStrategy::First => rates[0].base_rate.clone(),
             AggregationStrategy::Average => {
                 let sum: BigDecimal = rates.iter().map(|r| &r.base_rate).sum();
-                sum / BigDecimal::from(rates.len())
+                sum / BigDecimal::from(rates.len() as u64)
             }
             AggregationStrategy::Median => {
                 let mut sorted_rates: Vec<BigDecimal> =
