@@ -9,6 +9,8 @@ pub mod conversion_audit;
 #[cfg(feature = "database")]
 pub mod fee_structure;
 #[cfg(feature = "database")]
+pub mod fee_calculation;
+#[cfg(feature = "database")]
 pub mod trustline_operation;
 #[cfg(feature = "database")]
 pub mod payment_orchestrator;

@@ -1,7 +1,7 @@
-use aframp_backend::chains::stellar::client::StellarClient;
-use aframp_backend::chains::stellar::config::{StellarConfig, StellarNetwork};
-use aframp_backend::chains::stellar::service::StellarBlockchainService;
-use aframp_backend::chains::traits::{BlockchainService, MultiChainBalanceAggregator};
+use Bitmesh_backend::chains::stellar::client::StellarClient;
+use Bitmesh_backend::chains::stellar::config::{StellarConfig, StellarNetwork};
+use Bitmesh_backend::chains::stellar::service::StellarBlockchainService;
+use Bitmesh_backend::chains::traits::{BlockchainService, MultiChainBalanceAggregator};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
