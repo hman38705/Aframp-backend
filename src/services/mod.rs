@@ -1,5 +1,6 @@
 //! Services module for business logic and integrations
 
+pub mod balance;
 #[cfg(feature = "database")]
 pub mod cngn_trustline;
 #[cfg(feature = "database")]
