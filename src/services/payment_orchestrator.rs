@@ -1295,6 +1295,94 @@ impl PaymentOrchestrator {
             .map(|m| m.current_health)
             .unwrap_or(ProviderHealth::Healthy)
     }
+
+    // =========================================================================
+    // Webhook Handlers
+    // =========================================================================
+
+    /// Handle payment success webhook
+    pub async fn handle_payment_success(&self, transaction_reference: &str) -> OrchestratorResult<()> {
+        let transaction = self
+            .transaction_repo
+            .find_by_payment_reference(transaction_reference)
+            .await
+            .map_err(|_| OrchestratorError::TransactionNotFound {
+                transaction_id: transaction_reference.to_string(),
+            })?
+            .ok_or(OrchestratorError::TransactionNotFound {
+                transaction_id: transaction_reference.to_string(),
+            })?;
+
+        self.transition_state(
+            &transaction.transaction_id.to_string(),
+            OrchestrationState::PaymentConfirmed,
+            Some("Payment confirmed via webhook".to_string()),
+        )
+        .await?;
+
+        info!(tx_ref = %transaction_reference, "Payment success processed");
+        Ok(())
+    }
+
+    /// Handle payment failure webhook
+    pub async fn handle_payment_failure(&self, transaction_reference: &str, reason: &str) -> OrchestratorResult<()> {
+        let transaction = self
+            .transaction_repo
+            .find_by_payment_reference(transaction_reference)
+            .await
+            .map_err(|_| OrchestratorError::TransactionNotFound {
+                transaction_id: transaction_reference.to_string(),
+            })?
+            .ok_or(OrchestratorError::TransactionNotFound {
+                transaction_id: transaction_reference.to_string(),
+            })?;
+
+        self.handle_failure(&transaction.transaction_id.to_string(), reason).await?;
+        info!(tx_ref = %transaction_reference, reason = %reason, "Payment failure processed");
+        Ok(())
+    }
+
+    /// Handle withdrawal success webhook
+    pub async fn handle_withdrawal_success(&self, transaction_reference: &str) -> OrchestratorResult<()> {
+        let transaction = self
+            .transaction_repo
+            .find_by_payment_reference(transaction_reference)
+            .await
+            .map_err(|_| OrchestratorError::TransactionNotFound {
+                transaction_id: transaction_reference.to_string(),
+            })?
+            .ok_or(OrchestratorError::TransactionNotFound {
+                transaction_id: transaction_reference.to_string(),
+            })?;
+
+        self.transition_state(
+            &transaction.transaction_id.to_string(),
+            OrchestrationState::Completed,
+            Some("Withdrawal confirmed via webhook".to_string()),
+        )
+        .await?;
+
+        info!(tx_ref = %transaction_reference, "Withdrawal success processed");
+        Ok(())
+    }
+
+    /// Handle withdrawal failure webhook
+    pub async fn handle_withdrawal_failure(&self, transaction_reference: &str, reason: &str) -> OrchestratorResult<()> {
+        let transaction = self
+            .transaction_repo
+            .find_by_payment_reference(transaction_reference)
+            .await
+            .map_err(|_| OrchestratorError::TransactionNotFound {
+                transaction_id: transaction_reference.to_string(),
+            })?
+            .ok_or(OrchestratorError::TransactionNotFound {
+                transaction_id: transaction_reference.to_string(),
+            })?;
+
+        self.handle_failure(&transaction.transaction_id.to_string(), reason).await?;
+        info!(tx_ref = %transaction_reference, reason = %reason, "Withdrawal failure processed");
+        Ok(())
+    }
 }
 
 // ============================================================================
