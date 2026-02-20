@@ -317,6 +317,17 @@ pub mod fee {
             write!(f, "{}:{}:structure:{}", VERSION, NAMESPACE, self.fee_type)
         }
     }
+
+    /// API fees cache keys per spec
+    pub const FEES_ALL: &str = "api:fees:all";
+
+    pub fn fees_calculated(tx_type: &str, provider: &str, amount: &str) -> String {
+        format!("api:fees:{}:{}:{}", tx_type, provider, amount)
+    }
+
+    pub fn fees_comparison(tx_type: &str, amount: &str) -> String {
+        format!("api:fees:{}:all:{}", tx_type, amount)
+    }
 }
 
 #[cfg(test)]

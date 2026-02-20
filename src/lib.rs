@@ -43,6 +43,10 @@ pub mod payments;
 #[cfg(feature = "database")]
 pub mod config;
 
+// API handlers (exposed for integration tests)
+#[cfg(feature = "database")]
+pub mod api;
+
 // Health check module
 #[cfg(feature = "database")]
 pub mod health;

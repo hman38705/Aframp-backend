@@ -324,6 +324,20 @@ async fn main() -> anyhow::Result<()> {
     // Create the application router with logging middleware
     info!("🛣️  Setting up application routes...");
     
+    // Setup GET /api/fees routes (requires db; cache optional)
+    let fees_routes = if let Some(pool) = db_pool.clone() {
+        let fee_service = std::sync::Arc::new(services::fee_calculation::FeeCalculationService::new(pool));
+        let fees_state = api::fees::FeesState {
+            fee_service,
+            cache: redis_cache.clone(),
+        };
+        Router::new()
+            .route("/api/fees", get(api::fees::get_fees))
+            .with_state(fees_state)
+    } else {
+        Router::new()
+    };
+
     // Setup wallet routes with balance service
     let wallet_routes = if let (Some(client), Some(cache)) = (stellar_client.clone(), redis_cache.clone()) {
         let cngn_issuer = std::env::var("CNGN_ISSUER_ADDRESS")
@@ -378,6 +392,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/cngn/payments/sign", post(sign_cngn_payment))
         .route("/api/cngn/payments/submit", post(submit_cngn_payment))
         .route("/api/payments/initiate", post(initiate_payment))
+        .merge(fees_routes)
         .merge(wallet_routes)
         .merge(webhook_routes)
         .with_state(AppState {
