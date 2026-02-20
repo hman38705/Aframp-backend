@@ -16,6 +16,9 @@ pub mod trustline_operation;
 #[cfg(feature = "database")]
 pub mod payment_orchestrator;
 #[cfg(feature = "database")]
+pub mod exchange_rate;
+#[cfg(feature = "database")]
+pub mod rate_providers;
 pub mod webhook_processor;
 
 // Re-export blockchain traits for convenience
