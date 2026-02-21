@@ -387,6 +387,10 @@ async fn main() -> anyhow::Result<()> {
         Router::new()
     };
     
+    // Bill payment providers routes (public endpoint - no auth required)
+    let bills_routes = Router::new()
+        .route("/api/bills/providers", get(api::bills::get_providers));
+    
     let app = Router::new()
         .route("/", get(root))
         .route("/health", get(health))
@@ -424,6 +428,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(onramp_routes)
         .merge(wallet_routes)
         .merge(webhook_routes)
+        .merge(bills_routes)
         .with_state(AppState {
             db_pool,
             redis_cache,
