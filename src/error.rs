@@ -43,6 +43,8 @@ pub enum ErrorCode {
     InvalidWallet,
     #[serde(rename = "DUPLICATE_TRANSACTION")]
     DuplicateTransaction,
+    #[serde(rename = "INSUFFICIENT_LIQUIDITY")]
+    InsufficientLiquidity,
 
     // Infrastructure errors (5xx)
     #[serde(rename = "DATABASE_ERROR")]
@@ -206,6 +208,7 @@ impl AppError {
                 DomainError::RateExpired { .. } => 410, // Gone
                 DomainError::DuplicateTransaction { .. } => 409, // Conflict
                 DomainError::TrustlineCreationFailed { .. } => 422,
+                DomainError::InsufficientLiquidity { .. } => 409, // Conflict
             },
             AppErrorKind::Infrastructure(err) => match err {
                 InfrastructureError::Database { .. } => 500,
