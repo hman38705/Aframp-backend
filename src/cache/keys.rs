@@ -294,6 +294,31 @@ pub mod bill_payment {
     }
 }
 
+pub mod onramp {
+    use super::*;
+
+    pub const NAMESPACE: &str = "onramp";
+
+    #[derive(Debug, Clone)]
+    pub struct QuoteKey {
+        pub quote_id: String,
+    }
+
+    impl QuoteKey {
+        pub fn new(quote_id: impl Into<String>) -> Self {
+            Self {
+                quote_id: quote_id.into(),
+            }
+        }
+    }
+
+    impl fmt::Display for QuoteKey {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{}:{}:quote:{}", VERSION, NAMESPACE, self.quote_id)
+        }
+    }
+}
+
 pub mod fee {
     use super::*;
 

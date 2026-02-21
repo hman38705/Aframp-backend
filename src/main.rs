@@ -324,8 +324,12 @@ async fn main() -> anyhow::Result<()> {
     // Create the application router with logging middleware
     info!("🛣️  Setting up application routes...");
     
-    // Setup onramp quote routes (requires db + cache; stellar optional for liquidity check)
-    let onramp_routes = if let (Some(pool), Some(cache)) = (db_pool.clone(), redis_cache.clone()) {
+    // Setup onramp routes (quote service)
+    let onramp_routes = if let (Some(pool), Some(cache), Some(client)) = (
+        db_pool.clone(),
+        redis_cache.clone(),
+        stellar_client.clone(),
+    ) {
         let cngn_issuer = std::env::var("CNGN_ISSUER_ADDRESS")
             .or_else(|_| std::env::var("CNGN_ISSUER_MAINNET"))
             .unwrap_or_else(|_| "GXXXXDEFAULTISSUERXXXX".to_string());
@@ -341,20 +345,18 @@ async fn main() -> anyhow::Result<()> {
                 rate_repo,
                 services::exchange_rate::ExchangeRateServiceConfig::default(),
             )
-            .with_cache(cache)
+            .with_cache(cache.clone())
             .add_provider(std::sync::Arc::new(
                 services::rate_providers::FixedRateProvider::new(),
             ))
             .with_fee_service(fee_service.clone()),
         );
 
-        let quote_repo = database::onramp_quote_repository::OnrampQuoteRepository::new(pool);
-
         let quote_service = std::sync::Arc::new(services::onramp_quote::OnrampQuoteService::new(
             exchange_rate_service,
             fee_service,
-            quote_repo,
-            stellar_client.clone(),
+            client,
+            cache,
             cngn_issuer,
         ));
 
@@ -1089,19 +1091,17 @@ async fn list_trustline_operations_by_wallet(
 }
 
 async fn create_onramp_quote(
-    axum::extract::State(quote_service): axum::extract::State<
-        std::sync::Arc<services::onramp_quote::OnrampQuoteService>,
-    >,
+    axum::extract::State(quote_service): axum::extract::State<std::sync::Arc<services::onramp_quote::OnrampQuoteService>>,
     headers: axum::http::HeaderMap,
     Json(payload): Json<services::onramp_quote::OnrampQuoteRequest>,
 ) -> Result<
     Json<services::onramp_quote::OnrampQuoteResponse>,
     (
         axum::http::StatusCode,
-        Json<crate::middleware::error::ErrorResponse>,
+        Json<middleware::error::ErrorResponse>,
     ),
 > {
-    let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
+    let request_id = middleware::error::get_request_id_from_headers(&headers);
 
     quote_service
         .create_quote(payload)

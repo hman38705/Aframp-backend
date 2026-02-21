@@ -35,6 +35,12 @@ pub enum ErrorCode {
     InvalidCurrency,
     #[serde(rename = "INVALID_AMOUNT")]
     InvalidAmount,
+    #[serde(rename = "AMOUNT_TOO_LOW")]
+    AmountTooLow,
+    #[serde(rename = "INSUFFICIENT_LIQUIDITY")]
+    InsufficientLiquidity,
+    #[serde(rename = "INVALID_WALLET")]
+    InvalidWallet,
     #[serde(rename = "DUPLICATE_TRANSACTION")]
     DuplicateTransaction,
     #[serde(rename = "INSUFFICIENT_LIQUIDITY")]
@@ -78,6 +84,8 @@ pub enum DomainError {
     },
     /// Amount is invalid (negative, zero, or out of range)
     InvalidAmount { amount: String, reason: String },
+    /// Amount below minimum threshold
+    AmountTooLow { amount: String, minimum: String },
     /// Transaction with given ID doesn't exist
     TransactionNotFound { transaction_id: String },
     /// Wallet doesn't exist in the system
@@ -91,7 +99,7 @@ pub enum DomainError {
         wallet_address: String,
         reason: String,
     },
-    /// Insufficient cNGN liquidity for onramp
+    /// Insufficient cNGN liquidity on Stellar for onramp
     InsufficientLiquidity { amount: String },
 }
 
@@ -190,6 +198,8 @@ impl AppError {
     pub fn status_code(&self) -> u16 {
         match &self.kind {
             AppErrorKind::Domain(err) => match err {
+                DomainError::InsufficientLiquidity { .. } => 422,
+                DomainError::AmountTooLow { .. } => 400,
                 DomainError::InsufficientBalance { .. } => 422, // Unprocessable Entity
                 DomainError::TrustlineNotFound { .. } => 422,
                 DomainError::InvalidAmount { .. } => 400,
@@ -234,6 +244,7 @@ impl AppError {
                 DomainError::DuplicateTransaction { .. } => ErrorCode::DuplicateTransaction,
                 DomainError::TrustlineCreationFailed { .. } => ErrorCode::TrustlineCreationFailed,
                 DomainError::InsufficientLiquidity { .. } => ErrorCode::InsufficientLiquidity,
+                DomainError::AmountTooLow { .. } => ErrorCode::AmountTooLow,
             },
             AppErrorKind::Infrastructure(err) => match err {
                 InfrastructureError::Database { .. } => ErrorCode::DatabaseError,
@@ -246,7 +257,10 @@ impl AppError {
                 ExternalError::RateLimit { .. } => ErrorCode::RateLimitError,
                 ExternalError::Timeout { .. } => ErrorCode::ExternalServiceTimeout,
             },
-            AppErrorKind::Validation(_) => ErrorCode::ValidationError,
+            AppErrorKind::Validation(err) => match err {
+                ValidationError::InvalidWalletAddress { .. } => ErrorCode::InvalidWallet,
+                _ => ErrorCode::ValidationError,
+            },
         }
     }
 
@@ -302,7 +316,10 @@ impl AppError {
                     )
                 }
                 DomainError::InsufficientLiquidity { .. } => {
-                    "Insufficient cNGN liquidity. Try a smaller amount or check back later.".to_string()
+                    "cNGN liquidity unavailable for this amount. Try a smaller amount or check back later.".to_string()
+                }
+                DomainError::AmountTooLow { .. } => {
+                    "Minimum onramp amount is ₦1,000.".to_string()
                 }
             },
             AppErrorKind::Infrastructure(_) => {
