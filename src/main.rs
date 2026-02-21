@@ -229,9 +229,25 @@ async fn main() -> anyhow::Result<()> {
     info!("🏥 Initializing health checker...");
     let health_checker =
         HealthChecker::new(db_pool.clone(), redis_cache.clone(), stellar_client.clone());
-    info!("✅ Health checker initialized");
+    // Initialize notification service
+    let notification_service = std::sync::Arc::new(services::notification::NotificationService::new());
+
+    // Initialize payment provider factory
+    let provider_factory = if db_pool.is_some() {
+        info!("💳 Initializing payment provider factory...");
+        let factory = std::sync::Arc::new(PaymentProviderFactory::from_env().unwrap_or_else(|e| {
+            error!("Failed to initialize payment provider factory: {}", e);
+            panic!("Cannot start without payment providers");
+        }));
+        info!("✅ Payment provider factory initialized");
+        Some(factory)
+    } else {
+        None
+    };
 
     let (worker_shutdown_tx, worker_shutdown_rx) = watch::channel(false);
+    
+    // Start Transaction Monitor Worker
     let monitor_enabled = std::env::var("TX_MONITOR_ENABLED")
         .unwrap_or_else(|_| "true".to_string())
         .to_lowercase()
@@ -251,7 +267,7 @@ async fn main() -> anyhow::Result<()> {
                 client,
                 monitor_config,
             );
-            monitor_handle = Some(tokio::spawn(worker.run(worker_shutdown_rx)));
+            monitor_handle = Some(tokio::spawn(worker.run(worker_shutdown_rx.clone())));
         } else {
             info!(
                 "Skipping Stellar transaction monitor worker (missing db pool or stellar client)"
@@ -261,13 +277,41 @@ async fn main() -> anyhow::Result<()> {
         info!("Stellar transaction monitor worker disabled (TX_MONITOR_ENABLED=false)");
     }
 
+    // Start Offramp Processor Worker
+    let offramp_enabled = std::env::var("OFFRAMP_PROCESSOR_ENABLED")
+        .unwrap_or_else(|_| "true".to_string())
+        .to_lowercase() != "false";
+    let mut offramp_handle = None;
+    if offramp_enabled {
+        if let (Some(pool), Some(client), Some(factory)) = (db_pool.clone(), stellar_client.clone(), provider_factory.clone()) {
+            let config = workers::offramp_processor::OfframpProcessorConfig::from_env();
+            if let Err(e) = config.validate() {
+                error!(error = %e, "Invalid offramp processor configuration, skipping worker");
+            } else {
+                info!(
+                    poll_interval_secs = config.poll_interval.as_secs(),
+                    batch_size = config.batch_size,
+                    "Starting offramp processor worker"
+                );
+                let worker = workers::offramp_processor::OfframpProcessorWorker::new(
+                    pool,
+                    client,
+                    factory,
+                    notification_service.clone(),
+                    config,
+                );
+                offramp_handle = Some(tokio::spawn(worker.run(worker_shutdown_rx.clone())));
+            }
+        } else {
+            info!("Skipping offramp processor worker (missing db pool, stellar client, or provider factory)");
+        }
+    } else {
+        info!("Offramp processor worker disabled (OFFRAMP_PROCESSOR_ENABLED=false)");
+    }
+
     // Initialize webhook processor and retry worker
-    let webhook_routes = if let Some(pool) = db_pool.clone() {
+    let webhook_routes = if let (Some(pool), Some(provider_factory)) = (db_pool.clone(), provider_factory.clone()) {
         let webhook_repo = std::sync::Arc::new(database::webhook_repository::WebhookRepository::new(pool.clone()));
-        let provider_factory = std::sync::Arc::new(PaymentProviderFactory::from_env().unwrap_or_else(|e| {
-            error!("Failed to initialize payment provider factory: {}", e);
-            panic!("Cannot start without payment providers");
-        }));
         
         // Create orchestrator for webhook processing
         let transaction_repo = std::sync::Arc::new(database::transaction_repository::TransactionRepository::new(pool.clone()));
@@ -506,6 +550,11 @@ async fn main() -> anyhow::Result<()> {
     if let Some(handle) = monitor_handle {
         if let Err(e) = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
             error!(error = %e, "Timed out waiting for monitor worker shutdown");
+        }
+    }
+    if let Some(handle) = offramp_handle {
+        if let Err(e) = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
+            error!(error = %e, "Timed out waiting for offramp worker shutdown");
         }
     }
 

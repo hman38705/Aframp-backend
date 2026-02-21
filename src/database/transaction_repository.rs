@@ -249,12 +249,58 @@ impl TransactionRepository {
                     payment_reference, blockchain_tx_hash, error_message, metadata,
                     created_at, updated_at
              FROM transactions
-             WHERE status IN ('pending', 'processing')
+             WHERE status IN ('pending', 'processing', 'pending_payment')
                AND created_at > NOW() - INTERVAL '1 hour' * $1
              ORDER BY created_at ASC
              LIMIT $2",
         )
         .bind(window_hours)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(DatabaseError::from_sqlx)
+    }
+
+    /// Find transactions by status
+    pub async fn find_by_status(
+        &self,
+        status: &str,
+        limit: i64,
+    ) -> Result<Vec<Transaction>, DatabaseError> {
+        sqlx::query_as::<_, Transaction>(
+            "SELECT transaction_id, wallet_address, type, from_currency, to_currency, 
+                    from_amount, to_amount, cngn_amount, status, payment_provider, 
+                    payment_reference, blockchain_tx_hash, error_message, metadata, 
+                    created_at, updated_at 
+             FROM transactions 
+             WHERE status = $1 
+             ORDER BY created_at ASC 
+             LIMIT $2",
+        )
+        .bind(status)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(DatabaseError::from_sqlx)
+    }
+
+    /// Find offramp transactions by status
+    pub async fn find_offramps_by_status(
+        &self,
+        status: &str,
+        limit: i64,
+    ) -> Result<Vec<Transaction>, DatabaseError> {
+        sqlx::query_as::<_, Transaction>(
+            "SELECT transaction_id, wallet_address, type, from_currency, to_currency, 
+                    from_amount, to_amount, cngn_amount, status, payment_provider, 
+                    payment_reference, blockchain_tx_hash, error_message, metadata, 
+                    created_at, updated_at 
+             FROM transactions 
+             WHERE status = $1 AND type = 'offramp' 
+             ORDER BY created_at ASC 
+             LIMIT $2",
+        )
+        .bind(status)
         .bind(limit)
         .fetch_all(&self.pool)
         .await

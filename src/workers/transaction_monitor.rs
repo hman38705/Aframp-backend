@@ -221,11 +221,7 @@ impl TransactionMonitorWorker {
             //    but haven't waited long enough since the last attempt.
             // ------------------------------------------------------------------
             let retry_count = get_retry_count(Some(&tx.metadata));
-            if retry_count > 0
-                && !is_ready_for_retry(
-                    tx.metadata.get("last_retry_at"),
-                    retry_count,
-                )
+            if retry_count > 0 && !is_ready_for_retry(tx.metadata.get("last_retry_at"), retry_count)
             {
                 continue; // not yet ready; will be picked up in a later cycle
             }
@@ -438,35 +434,62 @@ impl TransactionMonitorWorker {
             }
 
             let tx_repo = TransactionRepository::new(self.pool.clone());
-            match tx_repo.find_by_id(memo).await {
-                Ok(Some(db_tx)) if db_tx.status == "pending" || db_tx.status == "processing" => {
+            let (tx_id_str, is_offramp) = if memo.starts_with("WD-") {
+                (&memo[3..], true)
+            } else {
+                (memo, false)
+            };
+
+            let tx_repo = TransactionRepository::new(self.pool.clone());
+            match tx_repo.find_by_id(tx_id_str).await {
+                Ok(Some(db_tx)) => {
+                    let is_pending = db_tx.status == "pending"
+                        || db_tx.status == "processing"
+                        || db_tx.status == "pending_payment";
+                    if !is_pending {
+                        continue;
+                    }
+
                     let mut metadata = db_tx.metadata.clone();
                     metadata["incoming_hash"] = json!(tx.hash);
                     metadata["incoming_ledger"] = json!(tx.ledger);
                     metadata["incoming_confirmed_at"] = json!(chrono::Utc::now().to_rfc3339());
+
+                    let next_status = if is_offramp || db_tx.r#type == "offramp" {
+                        "cngn_received"
+                    } else {
+                        "completed"
+                    };
+
                     tx_repo
                         .update_status_with_metadata(
                             &db_tx.transaction_id.to_string(),
-                            "completed",
+                            next_status,
                             metadata.clone(),
                         )
                         .await?;
+
                     // Also persist the confirmed hash to the dedicated column.
                     tx_repo
                         .update_blockchain_hash(&db_tx.transaction_id.to_string(), &tx.hash)
                         .await?;
+
                     info!(
                         transaction_id = %db_tx.transaction_id,
                         incoming_hash = %tx.hash,
                         ledger = ?tx.ledger,
-                        "incoming cNGN payment matched and confirmed"
+                        status = next_status,
+                        "incoming cNGN payment matched and updated"
                     );
-                    self.log_webhook_event(
-                        &db_tx.transaction_id.to_string(),
-                        "stellar.incoming.matched",
-                        metadata,
-                    )
-                    .await;
+
+                    let event_type = if next_status == "completed" {
+                        "stellar.incoming.matched"
+                    } else {
+                        "stellar.offramp.received"
+                    };
+
+                    self.log_webhook_event(&db_tx.transaction_id.to_string(), event_type, metadata)
+                        .await;
                 }
                 Ok(_) => {
                     self.log_unmatched_incoming(memo, &tx).await;
@@ -819,16 +842,14 @@ mod tests {
     #[test]
     fn old_enough_last_retry_at_is_ready() {
         // retry 1 → 10 s delay; timestamp 15 s ago → ready
-        let fifteen_seconds_ago =
-            (chrono::Utc::now() - chrono::Duration::seconds(15)).to_rfc3339();
+        let fifteen_seconds_ago = (chrono::Utc::now() - chrono::Duration::seconds(15)).to_rfc3339();
         let ts = json!(fifteen_seconds_ago);
         assert!(is_ready_for_retry(Some(&ts), 1));
     }
 
     #[test]
     fn retry_2_requires_30s_gap() {
-        let twenty_seconds_ago =
-            (chrono::Utc::now() - chrono::Duration::seconds(20)).to_rfc3339();
+        let twenty_seconds_ago = (chrono::Utc::now() - chrono::Duration::seconds(20)).to_rfc3339();
         let ts = json!(twenty_seconds_ago);
         assert!(!is_ready_for_retry(Some(&ts), 2), "20s < 30s → not ready");
 
