@@ -21,6 +21,7 @@ dependencies = [
  "hex",
  "hmac",
  "http",
+ "nuban",
  "redis",
  "regex",
  "reqwest",
@@ -2122,6 +2123,12 @@ checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "nuban"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adbf27f5f41b16a31fe40aa3bf57803456c5589aff3cd8c0f41b91cf378c1b79"
 
 [[package]]
 name = "num-bigint"

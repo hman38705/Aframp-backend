@@ -4,21 +4,21 @@
 //! for fetching rates, calculating conversions, and managing historical data.
 
 #[cfg(all(feature = "database", feature = "cache"))]
-use aframp_backend::cache::cache::RedisCache;
+use Bitmesh_backend::cache::cache::RedisCache;
 #[cfg(all(feature = "database", feature = "cache"))]
-use aframp_backend::cache::{init_cache_pool, CacheConfig};
+use Bitmesh_backend::cache::{init_cache_pool, CacheConfig};
 #[cfg(feature = "database")]
-use aframp_backend::database::exchange_rate_repository::ExchangeRateRepository;
+use Bitmesh_backend::database::exchange_rate_repository::ExchangeRateRepository;
 #[cfg(feature = "database")]
-use aframp_backend::database::fee_structure_repository::FeeStructureRepository;
+use Bitmesh_backend::database::fee_structure_repository::FeeStructureRepository;
 #[cfg(feature = "database")]
-use aframp_backend::services::exchange_rate::{
+use Bitmesh_backend::services::exchange_rate::{
     ConversionDirection, ConversionRequest, ExchangeRateService, ExchangeRateServiceConfig,
 };
 #[cfg(feature = "database")]
-use aframp_backend::services::fee_structure::FeeStructureService;
+use Bitmesh_backend::services::fee_structure::FeeStructureService;
 #[cfg(feature = "database")]
-use aframp_backend::services::rate_providers::FixedRateProvider;
+use Bitmesh_backend::services::rate_providers::FixedRateProvider;
 #[cfg(feature = "database")]
 use bigdecimal::BigDecimal;
 #[cfg(feature = "database")]
