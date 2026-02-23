@@ -2,7 +2,7 @@
 
 ## Summary
 
-I've created a separate test database environment for your Aframp backend project.
+A separate test database environment is available for Aframp backend development and integration testing.
 
 ## What Was Done
 
@@ -15,7 +15,7 @@ I've created a separate test database environment for your Aframp backend projec
 ### 2. Created Test Database Setup Script
 - **File**: `setup-test-db.sh`
 - Creates a separate `aframp_test` database
-- Runs migrations without the problematic `migrate:down` sections
+- Runs migrations with `sqlx migrate run`
 - Usage: `./setup-test-db.sh`
 
 ### 3. Created Test Environment Configuration
@@ -121,8 +121,14 @@ WARN Slow request completed request_id=<uuid> method=GET path=/api/... status=20
 - Check database connection: `psql -d aframp_test -c "SELECT 1;"`
 
 ### Migrations failing
-- Use the test setup script instead of sqlx migrate
-- The sqlx migrations have issues with the `migrate:down` sections
+- Run migration status:
+  ```bash
+  DATABASE_URL=postgresql:///aframp_test sqlx migrate info
+  ```
+- If checksum mismatch occurs:
+  ```bash
+  ./fix-migrations-checksums.sh aframp_test
+  ```
 
 ### Request logs not showing
 - Ensure `RUST_LOG=info` or `RUST_LOG=debug` is set

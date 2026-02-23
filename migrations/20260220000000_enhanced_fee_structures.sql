@@ -1,6 +1,9 @@
 -- Enhanced fee structures for tiered, provider-specific fees
 -- Supports Issue #44: Dynamic Fee Calculation Service
 
+-- Rename fee_type to transaction_type before any references to transaction_type
+ALTER TABLE fee_structures RENAME COLUMN fee_type TO transaction_type;
+
 -- Add new columns to fee_structures for tiered and provider-specific fees
 ALTER TABLE fee_structures 
 ADD COLUMN IF NOT EXISTS payment_provider TEXT,
@@ -23,9 +26,6 @@ ADD CONSTRAINT chk_platform_fee_percent CHECK (platform_fee_percent IS NULL OR (
 CREATE INDEX IF NOT EXISTS idx_fee_structures_tier_lookup 
 ON fee_structures(transaction_type, payment_provider, payment_method, is_active, min_amount, max_amount)
 WHERE is_active = TRUE;
-
--- Rename fee_type to transaction_type for clarity
-ALTER TABLE fee_structures RENAME COLUMN fee_type TO transaction_type;
 
 -- Update check constraint for transaction_type
 ALTER TABLE fee_structures DROP CONSTRAINT IF EXISTS fee_structures_fee_type_check;

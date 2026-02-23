@@ -58,7 +58,10 @@ impl OnrampQuoteRepository {
     }
 
     /// Find quote by quote_id
-    pub async fn find_by_quote_id(&self, quote_id: Uuid) -> Result<Option<OnrampQuote>, DatabaseError> {
+    pub async fn find_by_quote_id(
+        &self,
+        quote_id: Uuid,
+    ) -> Result<Option<OnrampQuote>, DatabaseError> {
         sqlx::query_as::<_, OnrampQuote>(
             r#"
             SELECT id, quote_id, amount_ngn, exchange_rate, gross_cngn, fee_cngn, net_cngn, status, expires_at, created_at, updated_at

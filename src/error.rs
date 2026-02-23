@@ -43,8 +43,6 @@ pub enum ErrorCode {
     InvalidWallet,
     #[serde(rename = "DUPLICATE_TRANSACTION")]
     DuplicateTransaction,
-    #[serde(rename = "INSUFFICIENT_LIQUIDITY")]
-    InsufficientLiquidity,
 
     // Infrastructure errors (5xx)
     #[serde(rename = "DATABASE_ERROR")]

@@ -3,12 +3,12 @@
 //! Requires: DATABASE_URL, REDIS_URL
 //! Run with: cargo test onramp_quote -- --ignored
 
+use std::sync::Arc;
 use Bitmesh_backend::cache::{init_cache_pool, CacheConfig, RedisCache};
-use Bitmesh_backend::database::onramp_quote_repository::OnrampQuoteRepository;
+use Bitmesh_backend::chains::stellar::{client::StellarClient, config::StellarConfig};
 use Bitmesh_backend::database::{
     exchange_rate_repository::ExchangeRateRepository,
-    fee_structure_repository::FeeStructureRepository,
-    init_pool,
+    fee_structure_repository::FeeStructureRepository, init_pool,
 };
 use Bitmesh_backend::services::onramp_quote::{OnrampQuoteRequest, OnrampQuoteService};
 use Bitmesh_backend::services::{
@@ -16,7 +16,6 @@ use Bitmesh_backend::services::{
     fee_structure::FeeStructureService,
     rate_providers::FixedRateProvider,
 };
-use std::sync::Arc;
 
 async fn setup_service() -> OnrampQuoteService {
     let database_url = std::env::var("DATABASE_URL")
@@ -38,18 +37,18 @@ async fn setup_service() -> OnrampQuoteService {
 
     let exchange_rate_service = Arc::new(
         ExchangeRateService::new(rate_repo, ExchangeRateServiceConfig::default())
-            .with_cache(redis_cache)
+            .with_cache(redis_cache.clone())
             .add_provider(Arc::new(FixedRateProvider::new()))
             .with_fee_service(fee_service.clone()),
     );
 
-    let quote_repo = OnrampQuoteRepository::new(pool);
+    let stellar_client = StellarClient::new(StellarConfig::default()).expect("Stellar client init");
 
     OnrampQuoteService::new(
         exchange_rate_service,
         fee_service,
-        quote_repo,
-        None,
+        stellar_client,
+        redis_cache,
         "GXXXXDEFAULTISSUERXXXX".to_string(),
     )
 }
@@ -60,18 +59,22 @@ async fn test_onramp_quote_success() {
     let service = setup_service().await;
 
     let result = service
-        .create_quote(OnrampQuoteRequest { amount_ngn: 50000 })
+        .create_quote(OnrampQuoteRequest {
+            amount_ngn: 50000,
+            wallet_address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            provider: "flutterwave".to_string(),
+            chain: Some("stellar".to_string()),
+        })
         .await;
 
     let response = result.expect("Quote creation should succeed");
 
     assert!(!response.quote_id.is_empty());
-    assert_eq!(response.amount_ngn, 50000);
-    assert!(response.exchange_rate > 0.0);
-    assert!(response.gross_cngn > 0.0);
-    assert!(response.fee_cngn >= 0.0);
-    assert!(response.net_cngn > 0.0);
-    assert!(response.net_cngn <= response.gross_cngn);
+    assert_eq!(response.input.amount_ngn, 50000);
+    assert!(response.output.rate > 0.0);
+    assert!(response.output.amount_cngn > 0);
+    assert!(response.fees.total_fee_ngn >= 0);
+    assert!(response.output.amount_ngn_after_fees > 0);
     assert!(!response.expires_at.is_empty());
 }
 
@@ -81,7 +84,12 @@ async fn test_onramp_quote_rejects_zero_amount() {
     let service = setup_service().await;
 
     let result = service
-        .create_quote(OnrampQuoteRequest { amount_ngn: 0 })
+        .create_quote(OnrampQuoteRequest {
+            amount_ngn: 0,
+            wallet_address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            provider: "flutterwave".to_string(),
+            chain: Some("stellar".to_string()),
+        })
         .await;
 
     assert!(result.is_err());

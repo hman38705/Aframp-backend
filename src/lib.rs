@@ -43,9 +43,17 @@ pub mod payments;
 #[cfg(feature = "database")]
 pub mod config;
 
+// API handlers (exposed for integration tests)
+#[cfg(feature = "database")]
+pub mod api;
+
 // Health check module
 #[cfg(feature = "database")]
 pub mod health;
+
+// Background workers
+#[cfg(feature = "database")]
+pub mod workers;
 
 // Contract error enum for Soroban (only when not using database feature)
 #[cfg(not(feature = "database"))]
