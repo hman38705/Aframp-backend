@@ -444,29 +444,52 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Setup wallet routes with balance service
-    let wallet_routes =
-        if let (Some(client), Some(cache)) = (stellar_client.clone(), redis_cache.clone()) {
-            let cngn_issuer = std::env::var("CNGN_ISSUER_ADDRESS")
-                .unwrap_or_else(|_| "GXXXXDEFAULTISSUERXXXX".to_string());
-
-            let balance_service = std::sync::Arc::new(services::balance::BalanceService::new(
-                client,
-                cache,
-                cngn_issuer,
-            ));
-
-            let wallet_state = api::wallet::WalletState { balance_service };
-
-            Router::new()
-                .route("/api/wallet/balance", get(api::wallet::get_balance))
-                .with_state(wallet_state)
-        } else {
-            Router::new()
+    let wallet_routes = if let (Some(client), Some(cache)) = (stellar_client.clone(), redis_cache.clone()) {
+        let cngn_issuer = std::env::var("CNGN_ISSUER_ADDRESS")
+            .unwrap_or_else(|_| "GXXXXDEFAULTISSUERXXXX".to_string());
+        
+        let balance_service = std::sync::Arc::new(services::balance::BalanceService::new(
+            client,
+            cache,
+            cngn_issuer,
+        ));
+        
+        let wallet_state = api::wallet::WalletState { balance_service };
+        
+        Router::new()
+            .route("/api/wallet/balance", get(api::wallet::get_balance))
+            .with_state(wallet_state)
+    } else {
+        Router::new()
+    };
+    
+    // Setup rates API routes with exchange rate service
+    let rates_routes = if let Some(pool) = db_pool.clone() {
+        use database::exchange_rate_repository::ExchangeRateRepository;
+        use services::exchange_rate::{ExchangeRateService, ExchangeRateServiceConfig};
+        
+        let repository = ExchangeRateRepository::new(pool.clone());
+        let config = ExchangeRateServiceConfig::default();
+        let mut exchange_rate_service = ExchangeRateService::new(repository, config);
+        
+        // Add cache to exchange rate service if available
+        if let Some(ref cache) = redis_cache {
+            exchange_rate_service = exchange_rate_service.with_cache(cache.clone());
+        }
+        
+        let rates_state = api::rates::RatesState {
+            exchange_rate_service: std::sync::Arc::new(exchange_rate_service),
+            cache: redis_cache.clone().map(std::sync::Arc::new),
         };
-
-    // Bill payment providers routes (public endpoint - no auth required)
-    let bills_routes = Router::new().route("/api/bills/providers", get(api::bills::get_providers));
-
+        
+        Router::new()
+            .route("/api/rates", get(api::rates::get_rates).options(api::rates::options_rates))
+            .with_state(rates_state)
+    } else {
+        info!("⏭️  Skipping rates routes (no database)");
+        Router::new()
+    };
+    
     let app = Router::new()
         .route("/", get(root))
         .route("/health", get(health))
@@ -503,6 +526,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/payments/initiate", post(initiate_payment))
         .merge(onramp_routes)
         .merge(wallet_routes)
+        .merge(rates_routes)
         .merge(webhook_routes)
         .merge(bills_routes)
         .with_state(AppState {
@@ -556,6 +580,7 @@ async fn main() -> anyhow::Result<()> {
     println!("║  GET  /health/ready              - Readiness probe          ║");
     println!("║  GET  /health/live               - Liveness probe           ║");
     println!("║  GET  /api/stellar/account/{{address}} - Stellar account    ║");
+    println!("║  GET  /api/rates                 - Exchange rates (public)  ║");
     println!("║                                                              ║");
     println!("╠══════════════════════════════════════════════════════════════╣");
     println!("║                                                              ║");
