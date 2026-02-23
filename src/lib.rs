@@ -51,6 +51,10 @@ pub mod api;
 #[cfg(feature = "database")]
 pub mod health;
 
+// Background workers
+#[cfg(feature = "database")]
+pub mod workers;
+
 // Contract error enum for Soroban (only when not using database feature)
 #[cfg(not(feature = "database"))]
 #[contracterror]
