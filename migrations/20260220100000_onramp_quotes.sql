@@ -22,5 +22,3 @@ CREATE INDEX IF NOT EXISTS idx_onramp_quotes_quote_id ON onramp_quotes(quote_id)
 CREATE INDEX IF NOT EXISTS idx_onramp_quotes_status ON onramp_quotes(status);
 CREATE INDEX IF NOT EXISTS idx_onramp_quotes_expires_at ON onramp_quotes(expires_at);
 
--- migrate:down
-DROP TABLE IF EXISTS onramp_quotes;

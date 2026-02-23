@@ -31,6 +31,7 @@ use middleware::logging::{request_logging_middleware, UuidRequestId};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::time::Duration;
 use tokio::signal;
 use tokio::sync::watch;
 use tower::ServiceBuilder;
@@ -87,10 +88,17 @@ async fn main() -> anyhow::Result<()> {
         "🚀 Starting Aframp backend service"
     );
 
+    let server_host = std::env::var("SERVER_HOST")
+        .or_else(|_| std::env::var("HOST"))
+        .unwrap_or_else(|_| "127.0.0.1".to_string());
+    let server_port = std::env::var("SERVER_PORT")
+        .or_else(|_| std::env::var("PORT"))
+        .unwrap_or_else(|_| "8000".to_string());
+
     // Log configuration
     info!(
-        host = std::env::var("HOST").unwrap_or_else(|_| "unknown".to_string()),
-        port = std::env::var("PORT").unwrap_or_else(|_| "unknown".to_string()),
+        host = %server_host,
+        port = %server_port,
         "Server configuration loaded"
     );
 
@@ -102,8 +110,36 @@ async fn main() -> anyhow::Result<()> {
         info!("📊 Initializing database connection pool...");
         let database_url =
             std::env::var("DATABASE_URL").map_err(|_| anyhow::anyhow!("DATABASE_URL not set"))?;
+        let db_pool_config = PoolConfig {
+            max_connections: std::env::var("DB_MAX_CONNECTIONS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(20),
+            min_connections: std::env::var("DB_MIN_CONNECTIONS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5),
+            connection_timeout: Duration::from_secs(
+                std::env::var("DB_CONNECTION_TIMEOUT")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(30),
+            ),
+            idle_timeout: Duration::from_secs(
+                std::env::var("DB_IDLE_TIMEOUT")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(600),
+            ),
+            max_lifetime: Duration::from_secs(
+                std::env::var("DB_MAX_LIFETIME")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(1800),
+            ),
+        };
 
-        let db_pool = init_pool(&database_url, Some(PoolConfig::default()))
+        let db_pool = init_pool(&database_url, Some(db_pool_config))
             .await
             .map_err(|e| {
                 error!("Failed to initialize database pool: {}", e);
@@ -128,7 +164,39 @@ async fn main() -> anyhow::Result<()> {
 
         let cache_config = CacheConfig {
             redis_url: redis_url.clone(),
-            ..Default::default()
+            max_connections: std::env::var("CACHE_MAX_CONNECTIONS")
+                .or_else(|_| std::env::var("REDIS_MAX_CONNECTIONS"))
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(20),
+            min_idle: std::env::var("REDIS_MIN_IDLE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5),
+            connection_timeout: Duration::from_secs(
+                std::env::var("REDIS_CONNECTION_TIMEOUT")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(5),
+            ),
+            max_lifetime: Duration::from_secs(
+                std::env::var("REDIS_MAX_LIFETIME")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(300),
+            ),
+            idle_timeout: Duration::from_secs(
+                std::env::var("REDIS_IDLE_TIMEOUT")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(60),
+            ),
+            health_check_interval: Duration::from_secs(
+                std::env::var("REDIS_HEALTH_CHECK_INTERVAL")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(30),
+            ),
         };
 
         let cache_pool = init_cache_pool(cache_config).await.map_err(|e| {
@@ -453,9 +521,7 @@ async fn main() -> anyhow::Result<()> {
     info!("✅ Routes configured");
 
     // Run the server with graceful shutdown
-    let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let port = std::env::var("PORT").unwrap_or_else(|_| "8000".to_string());
-    let addr: SocketAddr = format!("{}:{}", host, port).parse()?;
+    let addr: SocketAddr = format!("{}:{}", server_host, server_port).parse()?;
 
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
         error!("❌ Failed to bind to address {}: {}", addr, e);
@@ -475,11 +541,11 @@ async fn main() -> anyhow::Result<()> {
     );
     println!(
         "║  📡 Port:            {}                                  ║",
-        port
+        server_port
     );
     println!(
         "║  🏠 Host:            {}                            ║",
-        host
+        server_host
     );
     println!("║                                                              ║");
     println!("╠══════════════════════════════════════════════════════════════╣");
@@ -504,7 +570,7 @@ async fn main() -> anyhow::Result<()> {
 
     info!(
         address = %addr,
-        port = %port,
+        port = %server_port,
         "🚀 Server listening on http://{}",
         addr
     );

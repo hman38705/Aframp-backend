@@ -141,32 +141,3 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- migrate:down
--- Drop functions
-DROP FUNCTION IF EXISTS mark_bill_payment_ready_for_retry(UUID, INTEGER);
-DROP FUNCTION IF EXISTS transition_bill_to_refund(UUID, TEXT);
-DROP FUNCTION IF EXISTS mark_refund_processed(UUID, TEXT);
-
--- Drop views
-DROP VIEW IF EXISTS provider_performance;
-DROP VIEW IF EXISTS bill_payments_success_rate;
-DROP VIEW IF EXISTS bill_payments_by_status;
-
--- Drop indexes
-DROP INDEX IF EXISTS idx_bill_payments_pending;
-DROP INDEX IF EXISTS idx_bill_payments_retry_eligible;
-DROP INDEX IF EXISTS idx_bill_payments_created_at;
-DROP INDEX IF EXISTS idx_bill_payments_status;
-
--- Drop columns
-ALTER TABLE bill_payments
-DROP COLUMN IF EXISTS verification_data,
-DROP COLUMN IF EXISTS account_verified,
-DROP COLUMN IF EXISTS refund_tx_hash,
-DROP COLUMN IF EXISTS error_message,
-DROP COLUMN IF EXISTS last_retry_at,
-DROP COLUMN IF EXISTS retry_count,
-DROP COLUMN IF EXISTS provider_response,
-DROP COLUMN IF EXISTS token,
-DROP COLUMN IF EXISTS provider_reference,
-DROP COLUMN IF EXISTS status;
