@@ -1,183 +1,171 @@
 # Database Setup Guide
 
-This guide explains how to set up the PostgreSQL database for the Aframp backend.
+This is the canonical setup guide for local, test, and production PostgreSQL usage in Aframp.
 
 ## Prerequisites
 
-- PostgreSQL 14+ installed and running
-- `sqlx` CLI tool installed
-
-## Database Creation
-
-1. **Create the database**:
-   ```bash
-   sudo -u postgres createdb aframp
-   sudo -u postgres createuser -s $USER
-   ```
-
-2. **Install sqlx CLI** (if not already installed):
-   ```bash
-   cargo install --features postgres sqlx-cli
-   ```
-
-3. **Run migrations**:
-   ```bash
-   DATABASE_URL=postgresql://localhost/aframp sqlx migrate run
-   ```
-
-## Database Schema Overview
-
-The database contains the following tables:
-
-### Core Tables
-
-1. **users** - User accounts for non-custodial operations
-   - `id` (UUID) - Primary key
-   - `email` (TEXT) - Unique email address
-   - `phone` (TEXT) - Optional phone number
-   - `created_at`, `updated_at` (TIMESTAMPTZ)
-
-2. **wallets** - Connected wallet addresses
-   - `id` (UUID) - Primary key
-   - `user_id` (UUID) - Foreign key to users
-   - `wallet_address` (VARCHAR) - Unique blockchain address
-   - `chain` (TEXT) - Blockchain network (stellar, ethereum, bitcoin)
-   - `has_cngn_trustline` (BOOLEAN) - Whether CNGN trustline exists
-   - `cngn_balance` (NUMERIC) - Cached CNGN balance
-   - `last_balance_check` (TIMESTAMPTZ) - Last balance refresh timestamp
-   - `created_at`, `updated_at` (TIMESTAMPTZ)
-
-3. **transactions** - All payment operations
-   - `transaction_id` (UUID) - Primary key
-   - `wallet_address` (VARCHAR) - Foreign key to wallets
-   - `type` (TEXT) - Operation type (onramp, offramp, bill_payment)
-   - `from_currency`, `to_currency` (TEXT) - Currency codes
-   - `from_amount`, `to_amount`, `afri_amount` (NUMERIC) - Transaction amounts
-   - `status` (TEXT) - Transaction status
-   - `payment_provider` (TEXT) - Payment provider used
-   - `payment_reference` (TEXT) - Provider reference
-   - `blockchain_tx_hash` (TEXT) - On-chain transaction hash
-   - `error_message` (TEXT) - Error details if failed
-   - `metadata` (JSONB) - Provider-specific data
-   - `created_at`, `updated_at` (TIMESTAMPTZ)
-
-4. **cngn_trustlines** - CNGN trustline establishment
-   - `id` (UUID) - Primary key
-   - `wallet_address` (VARCHAR) - Unique wallet address
-   - `established_at` (TIMESTAMPTZ) - When trustline was established
-   - `metadata` (JSONB) - Chain-specific metadata
-   - `created_at`, `updated_at` (TIMESTAMPTZ)
-
-### Lookup Tables
-
-5. **transaction_statuses** - Extensible transaction status codes
-   - `code` (TEXT) - Status code (pending, processing, completed, failed)
-   - `description` (TEXT) - Human-readable description
-   - `created_at`, `updated_at` (TIMESTAMPTZ)
-
-## Migration Management
-
-### Running Migrations
+- PostgreSQL 14+
+- `psql`
+- Rust/Cargo
+- `sqlx` CLI:
 
 ```bash
-# Run all pending migrations
-DATABASE_URL=postgresql://localhost/aframp sqlx migrate run
-
-# Check migration status
-DATABASE_URL=postgresql://localhost/aframp sqlx migrate info
-
-# Revert last migration
-DATABASE_URL=postgresql://localhost/aframp sqlx migrate revert
+cargo install sqlx-cli --no-default-features --features postgres
 ```
 
-### Adding New Migrations
+## 1. Local Development Setup
+
+Create the development database:
 
 ```bash
-# Create a new migration
-sqlx migrate add migration_name
-
-# This creates files:
-# - migrations/YYYYMMDDHHMMSS_migration_name.sql (up migration)
-# - migrations/YYYYMMDDHHMMSS_migration_name.sql (down migration)
+sudo -u postgres createdb aframp
 ```
 
-## Database Connection
+Run migrations:
 
-The application uses the following environment variables for database configuration:
+```bash
+DATABASE_URL=postgresql:///aframp sqlx migrate run
+```
+
+Check migration status:
+
+```bash
+DATABASE_URL=postgresql:///aframp sqlx migrate info
+```
+
+## 2. Test Database Setup
+
+Use the project script:
+
+```bash
+./setup-test-db.sh
+```
+
+It recreates `aframp_test` and applies all migrations with `sqlx migrate run`.
+
+## 3. Production Setup
+
+Use the production script:
+
+```bash
+./setup-production-db.sh
+```
+
+What it does:
+
+- Creates/updates DB user and database.
+- Grants required privileges.
+- Applies migrations with `sqlx migrate run`.
+- Generates `.env.production`, `backup-db.sh`, `monitor-db.sh`, and `aframp-backend.service`.
+
+## 4. Environment Variables (Database + Cache)
+
+Recommended app variables:
 
 ```bash
 DATABASE_URL=postgresql://user:password@localhost:5432/aframp
-DATABASE_MAX_CONNECTIONS=20
+DB_MAX_CONNECTIONS=50
+DB_MIN_CONNECTIONS=10
+DB_CONNECTION_TIMEOUT=30
+DB_IDLE_TIMEOUT=300
+DB_MAX_LIFETIME=1800
+
+REDIS_URL=redis://127.0.0.1:6379
+CACHE_MAX_CONNECTIONS=50
+REDIS_MIN_IDLE=5
+REDIS_CONNECTION_TIMEOUT=5
+REDIS_MAX_LIFETIME=300
+REDIS_IDLE_TIMEOUT=60
+REDIS_HEALTH_CHECK_INTERVAL=30
 ```
 
-## Troubleshooting
+Server variables:
 
-### Common Issues
-
-1. **Connection refused**:
-   ```bash
-   # Check if PostgreSQL is running
-   sudo systemctl status postgresql
-   
-   # Start PostgreSQL if needed
-   sudo systemctl start postgresql
-   ```
-
-2. **Database does not exist**:
-   ```bash
-   # Create the database
-   sudo -u postgres createdb aframp
-   ```
-
-3. **Permission denied**:
-   ```bash
-   # Create user with superuser privileges
-   sudo -u postgres createuser -s $USER
-   ```
-
-4. **Migration errors**:
-   ```bash
-   # Check current migration status
-   DATABASE_URL=postgresql://localhost/aframp sqlx migrate info
-   
-   # Revert and re-run if needed
-   DATABASE_URL=postgresql://localhost/aframp sqlx migrate revert
-   DATABASE_URL=postgresql://localhost/aframp sqlx migrate run
-   ```
-
-### Useful Queries
-
-```sql
--- Check database connection
-SELECT version();
-
--- List all tables
-SELECT table_name FROM information_schema.tables WHERE table_schema = 'public';
-
--- Check migration status
-SELECT * FROM _sqlx_migrations;
-
--- Count records in key tables
-SELECT COUNT(*) FROM users;
-SELECT COUNT(*) FROM wallets;
-SELECT COUNT(*) FROM transactions;
-```
-
-## Backup and Restore
-
-### Backup
 ```bash
-pg_dump -h localhost -U username -d aframp > backup.sql
+SERVER_HOST=0.0.0.0
+SERVER_PORT=8000
 ```
 
-### Restore
+Backward compatibility is still supported for `HOST`/`PORT`.
+
+## 5. Passwords with Special Characters
+
+If DB password contains reserved URL characters (`/`, `+`, `@`, `:`), avoid embedding it directly in `DATABASE_URL` for one-off CLI commands.
+
+Use:
+
 ```bash
-psql -h localhost -U username -d aframp < backup.sql
+PGPASSWORD='your_password' DATABASE_URL='postgresql://db_user@localhost:5432/aframp' sqlx migrate run
 ```
 
-## Performance Considerations
+## 6. Migration Rules
 
-- Indexes are created on frequently queried columns
-- Use `NUMERIC` for monetary values to avoid precision issues
-- `updated_at` columns are automatically maintained via triggers
-- JSONB is used for flexible metadata storage
+- Migration files in `migrations/` are forward-only SQL files.
+- Do not append rollback SQL inside the same `.sql` file.
+- Never modify an already-applied migration in shared environments unless you also reconcile checksums.
+
+Add a new migration:
+
+```bash
+sqlx migrate add your_change_name
+```
+
+## 7. Troubleshooting
+
+### A) `migration ... was previously applied but has been modified`
+
+Update stored SQLx checksums to match current files:
+
+```bash
+./fix-migrations-checksums.sh
+```
+
+Or target a specific DB:
+
+```bash
+./fix-migrations-checksums.sh aframp_test
+```
+
+### B) `invalid port number` while running `sqlx`
+
+Usually caused by an unescaped password in URL. Use `PGPASSWORD` pattern above.
+
+### C) `relation ... does not exist` during migration
+
+Check status:
+
+```bash
+DATABASE_URL=postgresql:///aframp sqlx migrate info
+```
+
+If local and disposable, recreate DB and rerun:
+
+```bash
+dropdb aframp && createdb aframp && DATABASE_URL=postgresql:///aframp sqlx migrate run
+```
+
+## 8. Verification Commands
+
+List databases:
+
+```bash
+psql -U postgres -h localhost -W -d postgres -c "\l"
+```
+
+List users/roles:
+
+```bash
+psql -U postgres -h localhost -W -d postgres -c "\du"
+```
+
+List tables:
+
+```bash
+psql -U postgres -h localhost -W -d aframp -c "\dt"
+```
+
+Check migration records:
+
+```bash
+psql -U postgres -h localhost -W -d aframp -c "SELECT version, description, success FROM _sqlx_migrations ORDER BY version;"
+```

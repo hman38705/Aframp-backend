@@ -26,7 +26,6 @@ echo "  Database: $DB_NAME"
 echo "  User: $DB_USER"
 echo "  Password: [generated securely]"
 echo ""
-echo "  Password value: $DB_PASSWORD"
 echo ""
 
 if ! command -v sqlx >/dev/null 2>&1; then
