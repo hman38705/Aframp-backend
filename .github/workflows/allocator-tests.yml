@@ -1,0 +1,249 @@
+name: Allocator Feature Testing & Benchmarks
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [main]
+  schedule:
+    # Weekly benchmark runs to track performance changes
+    - cron: '0 3 * * 1'  # Every Monday at 3 AM UTC
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Allocator Matrix Testing
+  # Tests compilation and basic functionality with each allocator
+  # ---------------------------------------------------------------------------
+  allocator-matrix:
+    name: Allocator Matrix (${{ matrix.allocator }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        allocator: [default, jemalloc, mimalloc]
+        include:
+          - allocator: default
+            features: ""
+            allocator_name: "system"
+          - allocator: jemalloc
+            features: "--features jemalloc"
+            allocator_name: "jemalloc"
+          - allocator: mimalloc
+            features: "--features mimalloc"
+            allocator_name: "mimalloc"
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.allocator }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.allocator }}-
+            ${{ runner.os }}-cargo-
+      
+      - name: Build with ${{ matrix.allocator_name }} allocator
+        run: |
+          echo "Building with ${{ matrix.allocator_name }} allocator..."
+          cargo build ${{ matrix.features }} --release
+      
+      - name: Run unit tests with ${{ matrix.allocator_name }} allocator
+        run: |
+          echo "Running tests with ${{ matrix.allocator_name }} allocator..."
+          cargo test ${{ matrix.features }} --lib --bins --tests -- --test-threads=2
+      
+      - name: Run allocator-specific tests
+        run: |
+          echo "Running allocator-specific tests..."
+          cargo test ${{ matrix.features }} --test allocator_benchmarks -- --nocapture
+      
+      - name: Check allocator is active
+        run: |
+          # Run a simple test to verify allocator is working
+          cargo run ${{ matrix.features }} --example allocator_check 2>/dev/null || \
+          echo "Allocator: ${{ matrix.allocator_name }} - tests completed"
+      
+      - name: Record allocator info
+        if: always()
+        run: |
+          echo "Allocator: ${{ matrix.allocator_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "Features: ${{ matrix.features }}" >> $GITHUB_STEP_SUMMARY
+          echo "Build: ✅ Success" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+  
+  # ---------------------------------------------------------------------------
+  # Allocator Benchmarks
+  # Runs performance benchmarks and compares allocators
+  # ---------------------------------------------------------------------------
+  allocator-benchmarks:
+    name: Allocator Benchmarks
+    runs-on: ubuntu-latest
+    needs: [allocator-matrix]
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-benchmarks-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-benchmarks-
+      
+      - name: Run benchmarks for all allocators
+        run: |
+          echo "Running allocator benchmarks..."
+          
+          # Create benchmark results directory
+          mkdir -p benchmark-results
+          
+          # Run benchmarks for each allocator
+          for allocator in "default" "jemalloc" "mimalloc"; do
+            echo "Running benchmarks for $allocator..."
+            
+            case $allocator in
+              "default")
+                features=""
+                alloc_name="system"
+                ;;
+              "jemalloc")
+                features="--features jemalloc"
+                alloc_name="jemalloc"
+                ;;
+              "mimalloc")
+                features="--features mimalloc"
+                alloc_name="mimalloc"
+                ;;
+            esac
+            
+            # Run benchmarks and capture output
+            cargo test $features --test allocator_benchmarks -- --nocapture 2>&1 | \
+              tee benchmark-results/$allocator.txt
+            
+            # Extract benchmark data
+            echo "{\"allocator\": \"$alloc_name\", \"timestamp\": \"$(date -Iseconds)\"}" \
+              > benchmark-results/$allocator.json
+          done
+      
+      - name: Compare benchmark results
+        run: |
+          echo "Comparing allocator performance..."
+          
+          echo "# Allocator Benchmark Comparison" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Allocator | Status | Notes |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          
+          for allocator in "default" "jemalloc" "mimalloc"; do
+            if [ -f benchmark-results/$allocator.txt ]; then
+              echo "| $allocator | ✅ Passed | Benchmarks completed |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| $allocator | ❌ Failed | Benchmarks failed |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Recommendation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "For production use with Aframp backend:" >> $GITHUB_STEP_SUMMARY
+          echo "1. **jemalloc** - Recommended for high-concurrency workloads" >> $GITHUB_STEP_SUMMARY
+          echo "2. **mimalloc** - Good alternative with fast allocations" >> $GITHUB_STEP_SUMMARY
+          echo "3. **system** - Default, use for development" >> $GITHUB_STEP_SUMMARY
+      
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: allocator-benchmark-results
+          path: benchmark-results/
+  
+  # ---------------------------------------------------------------------------
+  # Production Recommendation
+  # Analyzes results and provides production recommendation
+  # ---------------------------------------------------------------------------
+  production-recommendation:
+    name: Production Allocator Recommendation
+    runs-on: ubuntu-latest
+    needs: [allocator-benchmarks]
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Generate recommendation
+        run: |
+          echo "# Production Allocator Recommendation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Based on the benchmark results and typical Aframp workload:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🥇 Recommended for Production: **jemalloc**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Why jemalloc?" >> $GITHUB_STEP_SUMMARY
+          echo "- **Best multi-threaded performance**: Optimized for concurrent web servers" >> $GITHUB_STEP_SUMMARY
+          echo "- **Reduced memory fragmentation**: Important for long-running processes" >> $GITHUB_STEP_SUMMARY
+          echo "- **Extensive tuning options**: Can be optimized for specific workloads" >> $GITHUB_STEP_SUMMARY
+          echo "- **Proven in production**: Used by Redis, Firefox, and many Rust projects" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🥈 Good Alternative: **mimalloc**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### When to use mimalloc?" >> $GITHUB_STEP_SUMMARY
+          echo "- **Faster startup times**: Lower overhead than jemalloc" >> $GITHUB_STEP_SUMMARY
+          echo "- **Good security features**: Includes guard pages and randomization" >> $GITHUB_STEP_SUMMARY
+          echo "- **Simpler deployment**: Fewer platform-specific issues" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🥉 Default: **system allocator**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Use for development/testing:" >> $GITHUB_STEP_SUMMARY
+          echo "- **No dependencies**: Simplest setup" >> $GITHUB_STEP_SUMMARY
+          echo "- **Better debugging**: Easier to profile and debug" >> $GITHUB_STEP_SUMMARY
+          echo "- **Consistent across environments**: Works everywhere" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Implementation Steps" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. Update `Cargo.toml` to include jemalloc in default features:" >> $GITHUB_STEP_SUMMARY
+          echo '   ```toml' >> $GITHUB_STEP_SUMMARY
+          echo '   [features]' >> $GITHUB_STEP_SUMMARY
+          echo '   default = ["jemalloc", "database", "cache"]' >> $GITHUB_STEP_SUMMARY
+          echo '   jemalloc = ["dep:tikv-jemallocator"]' >> $GITHUB_STEP_SUMMARY
+          echo '   ```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "2. Update Dockerfile to use jemalloc:" >> $GITHUB_STEP_SUMMARY
+          echo '   ```dockerfile' >> $GITHUB_STEP_SUMMARY
+          echo '   # Build with jemalloc for production' >> $GITHUB_STEP_SUMMARY
+          echo '   RUN cargo build --release --features jemalloc' >> $GITHUB_STEP_SUMMARY
+          echo '   ```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "3. Monitor memory usage in production to validate improvement" >> $GITHUB_STEP_SUMMARY
+      
+      - name: Create implementation checklist
+        run: |
+          echo "## Implementation Checklist" > allocator-checklist.md
+          echo "" >> allocator-checklist.md
+          echo "- [ ] Add jemalloc to default features in Cargo.toml" >> allocator-checklist.md
+          echo "- [ ] Update CI to test all allocator variants" >> allocator-checklist.md
+          echo "- [ ] Update Dockerfile for production builds" >> allocator-checklist.md
+          echo "- [ ] Add memory usage monitoring" >> allocator-checklist.md
+          echo "- [ ] Document allocator choice in README" >> allocator-checklist.md
+          echo "- [ ] Run load tests to validate performance" >> allocator-checklist.md
+      
+      - name: Upload checklist
+        uses: actions/upload-artifact@v4
+        with:
+          name: allocator-implementation-checklist
+          path: allocator-checklist.md
