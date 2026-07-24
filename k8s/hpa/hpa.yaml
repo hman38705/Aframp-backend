@@ -33,6 +33,21 @@ spec:
           type: AverageValue
           averageValue: "80"
 
+    # --- Custom metric: Stellar submission engine queue depth ---
+    # Sourced from stellar_submission_queue_depth via Prometheus Adapter
+    # (exposed as aframp_stellar_queue_depth — see
+    # k8s/monitoring/prometheus-adapter-config.yaml). Batch-mint bursts spike
+    # this queue faster than CPU climbs, so scale directly on it: add a
+    # replica per 50 queued transactions. The 5-minute scaleDown
+    # stabilization window below prevents flapping once the burst drains.
+    - type: External
+      external:
+        metric:
+          name: aframp_stellar_queue_depth
+        target:
+          type: AverageValue
+          averageValue: "50"
+
   behavior:
     scaleUp:
       # React quickly to traffic spikes: allow doubling pods every 60 s.

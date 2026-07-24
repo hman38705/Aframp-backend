@@ -55,3 +55,30 @@ data:
         metricsQuery: |
           sum(aframp_http_requests_in_flight{<<.LabelMatchers>>})
           by (<<.GroupBy>>)
+
+    # ---------------------------------------------------------------------
+    # External metrics (custom.metrics.k8s.io "rules" above are namespaced
+    # to a resource type — Pods/Namespace — and used for Pods-type HPA
+    # metrics; externalRules feed the external.metrics.k8s.io API consumed
+    # by External-type HPA metrics, which is what a cluster-wide gauge like
+    # queue depth needs since it isn't scoped to an individual pod).
+    # ---------------------------------------------------------------------
+    externalRules:
+      # -----------------------------------------------------------------------
+      # aframp_stellar_queue_depth
+      # Exposes the Stellar submission engine's pending-transaction queue
+      # depth (stellar_submission_queue_depth, a gauge set in
+      # src/stellar/submission.rs) so the HPA can scale the aframp-backend
+      # deployment on batch-mint burst load instead of relying on CPU alone.
+      # -----------------------------------------------------------------------
+      - seriesQuery: 'stellar_submission_queue_depth{namespace!=""}'
+        resources:
+          overrides:
+            namespace:
+              resource: namespace
+        name:
+          matches: "stellar_submission_queue_depth"
+          as: "aframp_stellar_queue_depth"
+        metricsQuery: |
+          max(stellar_submission_queue_depth{<<.LabelMatchers>>})
+          by (<<.GroupBy>>)

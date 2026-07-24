@@ -44,6 +44,21 @@ spec:
         target:
           type: AverageValue
           averageValue: "1000"
+    # Custom metric: Stellar submission engine queue depth. Batch minting
+    # produces bursty load that CPU/memory don't react to fast enough, so
+    # scale directly on the pending-transaction queue (aframp_stellar_queue_depth,
+    # served by prometheus-adapter from stellar_submission_queue_depth — see
+    # k8s/monitoring/prometheus-adapter-config.yaml). averageValue of 50 means
+    # the HPA adds a replica for every 50 queued transactions; combined with
+    # scaleDown.stabilizationWindowSeconds below, it drains back down once
+    # depth falls under ~10 per replica without thrashing.
+    - type: External
+      external:
+        metric:
+          name: aframp_stellar_queue_depth
+        target:
+          type: AverageValue
+          averageValue: "50"
   behavior:
     scaleUp:
       stabilizationWindowSeconds: 60   # Cooldown: prevent flapping on scale-up
