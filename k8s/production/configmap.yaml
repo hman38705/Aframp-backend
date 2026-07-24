@@ -1,5 +1,14 @@
 ---
-# Application Configuration
+# Application Configuration — non-sensitive settings only. Sensitive values
+# (DB/Redis URLs, JWT secret, etc.) live in Secrets and are wired into
+# k8s/production/deployment.yaml separately.
+#
+# Mounted into the aframp-api and aframp-worker Deployments via `envFrom`.
+#
+# Keys that also appear in config/production.toml must stay in sync with it;
+# scripts/detect_config_drift.py checks this (CI runs it in --source
+# manifest mode on every change; run --source live against a real cluster
+# for an operator-driven post-deploy check).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -8,12 +17,14 @@ metadata:
 data:
   # Application settings
   ENVIRONMENT: "production"
-  LOG_LEVEL: "info"
-  
+  APP_ENV: "production"
+  RUST_LOG: "info,aframp=debug"
+  LOG_LEVEL: "WARN"
+
   # Stellar Network
-  STELLAR_NETWORK: "public"
-  HORIZON_URL: "https://horizon.stellar.org"
-  
+  STELLAR_NETWORK: "mainnet"
+  STELLAR_HORIZON_URL: "https://horizon.stellar.org"
+
   # Feature flags
   ENABLE_ANALYTICS: "true"
   ENABLE_ABUSE_DETECTION: "true"
