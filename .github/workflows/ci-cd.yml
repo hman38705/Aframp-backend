@@ -277,11 +277,23 @@ jobs:
           REDIS_URL: redis://localhost:6379
         run: cargo test --tests --all-features -- --test-threads=2
 
+  # ── Dockerfile lint ────────────────────────────────────────────────────────
+  dockerfile-lint:
+    name: Lint Dockerfile (Hadolint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: error
+
   # ── Docker build & push (main branch only) ──────────────────────────────────
   build-push:
     name: Build & Push Docker Image
     runs-on: ubuntu-latest
-    needs: [fmt, clippy, unit-tests, integration-tests, security-scan, validate-gateway-config, openapi-check]
+    needs: [fmt, clippy, unit-tests, integration-tests, security-scan, validate-gateway-config, openapi-check, dockerfile-lint]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     outputs:
       image-digest: ${{ steps.build.outputs.digest }}
