@@ -42,6 +42,14 @@ data:
     start_pattern = '^{"timestamp"'
     timeout_ms = 1000
 
+    # Nginx JSON access logs — source of the rate-limit rejection metric.
+    # See the json_combined log_format in config/nginx/nginx.conf, which
+    # includes a "limit_req_status" field ("PASSED" | "DELAYED" | "REJECTED").
+    [sources.nginx_logs]
+    type = "file"
+    include = ["/var/log/nginx/access.log"]
+    read_from = "beginning"
+
     # System metrics
     [sources.host_metrics]
     type = "host_metrics"
@@ -122,6 +130,30 @@ data:
     .level == "error" || .level == "warn" || .level == "critical"
     '''
 
+    # Parse nginx JSON access logs
+    [transforms.parse_nginx_json]
+    type = "remap"
+    inputs = ["nginx_logs"]
+    source = '''
+    . = parse_json!(.message)
+    '''
+
+    # Turn the coarse-DDoS-filter verdict into a Prometheus counter.
+    # See docs/RATE_LIMITING.md — this is the nginx-side counterpart to the
+    # app-level aframp_rate_limit_breaches_total metric.
+    [transforms.nginx_rate_limit_metric]
+    type = "log_to_metric"
+    inputs = ["parse_nginx_json"]
+
+    [[transforms.nginx_rate_limit_metric.metrics]]
+    type = "counter"
+    field = "limit_req_status"
+    name = "rate_limit_rejections_total"
+    namespace = "nginx"
+
+    [transforms.nginx_rate_limit_metric.metrics.tags]
+    status = "{{limit_req_status}}"
+
     # ------------------------------------------------------------------------
     # Sinks - Send logs to destinations
     # ------------------------------------------------------------------------
@@ -188,7 +220,7 @@ data:
     # Prometheus metrics export
     [sinks.prometheus_metrics]
     type = "prometheus_exporter"
-    inputs = ["internal_metrics", "host_metrics"]
+    inputs = ["internal_metrics", "host_metrics", "nginx_rate_limit_metric"]
     address = "0.0.0.0:9598"
     default_namespace = "vector"
 

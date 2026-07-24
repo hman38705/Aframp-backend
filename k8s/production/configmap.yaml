@@ -84,8 +84,13 @@ data:
         add_header X-XSS-Protection "1; mode=block" always;
         add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
         
-        # Rate limiting
-        limit_req_zone $binary_remote_addr zone=api_limit:10m rate=100r/s;
+        # Rate limiting — coarse DDoS filter ONLY. Fine-grained, per-endpoint,
+        # per-IP/per-wallet limits are owned by the Redis-backed application
+        # middleware (src/middleware/rate_limit.rs), configured in
+        # rate_limits.yaml — that is the single source of truth for product
+        # rate-limit policy. This zone is set far above every app-level limit
+        # so it never conflicts with app decisions; see docs/RATE_LIMITING.md.
+        limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10000r/s;
         limit_req_status 429;
         
         upstream aframp_api {
@@ -104,10 +109,18 @@ data:
                 return 200 "healthy\n";
                 add_header Content-Type text/plain;
             }
-            
-            # API endpoints with rate limiting
+
+            # Metrics — nginx-prometheus-exporter scrapes this for Grafana
+            location /nginx_status {
+                access_log off;
+                stub_status;
+                allow 127.0.0.1;
+                deny all;
+            }
+
+            # API endpoints — coarse DDoS filter only, see comment above
             location /api/ {
-                limit_req zone=api_limit burst=20 nodelay;
+                limit_req zone=api_limit burst=2000 nodelay;
                 
                 proxy_pass http://aframp_api;
                 proxy_http_version 1.1;
