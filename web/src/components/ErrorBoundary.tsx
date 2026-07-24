@@ -58,7 +58,7 @@ export class ErrorBoundary extends Component<Props, State> {
       };
 
       // Send to backend error tracking
-      await apiClient.post('/api/v1/admin/infra/errors/capture', errorContext);
+      await apiClient.post('/api/v1/client-errors', errorContext);
     } catch (captureError) {
       // Silently fail - don't throw in error boundary
       console.error('Failed to capture error:', captureError);

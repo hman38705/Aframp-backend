@@ -11,8 +11,26 @@ import { DEFAULT_TENANT_CONFIG } from '../../types';
 const TenantContext = createContext<TenantConfig>(DEFAULT_TENANT_CONFIG);
 
 export function TenantProvider({ children }: { children: React.ReactNode }) {
-  const { config } = useTenantConfig();
-  return <TenantContext.Provider value={config}>{children}</TenantContext.Provider>;
+  const { config, isStale } = useTenantConfig();
+  return (
+    <TenantContext.Provider value={config}>
+      {isStale && (
+        <div
+          role="alert"
+          style={{
+            background: '#7a1f1f',
+            color: '#fff',
+            padding: '8px 16px',
+            textAlign: 'center',
+            fontSize: '14px',
+          }}
+        >
+          Unable to refresh tenant configuration — showing last-known settings.
+        </div>
+      )}
+      {children}
+    </TenantContext.Provider>
+  );
 }
 
 export function useTenant() {
