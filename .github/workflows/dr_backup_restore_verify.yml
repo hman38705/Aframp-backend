@@ -7,17 +7,24 @@ name: DR — Backup Restore Verification
 
 on:
   schedule:
-    # 02:00 UTC daily — low-traffic window
+    # 02:00 UTC daily — low-traffic window (lightweight automated check)
     - cron: "0 2 * * *"
+    # 03:00 UTC on the 1st of every month — full DR drill of record, logged to docs/DR_TEST_LOG.md
+    - cron: "0 3 1 * *"
   workflow_dispatch:
     inputs:
       backup_s3_key:
         description: "Override S3 key of backup to restore (leave blank for latest)"
         required: false
 
+permissions:
+  contents: write
+
 env:
   RESTORE_DB_NAME: dr_restore_test
   DR_API_BASE: ${{ secrets.DR_API_BASE_URL }}
+  # Recovery Time Objective policy ceiling (seconds). Breaching this is a hard failure.
+  RTO_CEILING_SECONDS: 14400
 
 jobs:
   restore-verify:
@@ -114,9 +121,13 @@ jobs:
           END=$(date +%s)
           DURATION=$(( END - ${{ steps.timer.outputs.start }} ))
           echo "duration=${DURATION}" >> "$GITHUB_OUTPUT"
-          echo "Restore completed in ${DURATION}s (RTO target: 900s)"
+          echo "Restore completed in ${DURATION}s (operational RTO target: 900s, policy ceiling: ${RTO_CEILING_SECONDS}s)"
           if [ "$DURATION" -gt 900 ]; then
-            echo "::warning::RTO target (900s) breached — actual: ${DURATION}s"
+            echo "::warning::Operational RTO target (900s) breached — actual: ${DURATION}s"
+          fi
+          if [ "$DURATION" -gt "$RTO_CEILING_SECONDS" ]; then
+            echo "::error::RTO policy ceiling (${RTO_CEILING_SECONDS}s / 4h) breached — actual: ${DURATION}s"
+            exit 1
           fi
 
       # -----------------------------------------------------------------------
@@ -141,6 +152,34 @@ jobs:
 
           if [ "$TX_COUNT" -lt 1 ]; then
             echo "::error::Integrity check failed — no transactions found in restored DB"
+            exit 1
+          fi
+
+      - name: Run content hash checks (critical tables)
+        id: hash_check
+        env:
+          PGPASSWORD: ${{ secrets.RESTORE_DB_PASSWORD }}
+        run: |
+          # Deterministic content hash per critical table — catches silent
+          # corruption/truncation that a row count alone would miss.
+          run_hash() {
+            local table="$1"
+            psql \
+              --host=localhost \
+              --port=5432 \
+              --username=restore_user \
+              --dbname=${{ env.RESTORE_DB_NAME }} \
+              --tuples-only \
+              --command "SELECT md5(COALESCE(string_agg(t.*::text, '|' ORDER BY t.id), '')) FROM ${table} t;" \
+              | tr -d ' '
+          }
+
+          TX_HASH=$(run_hash transactions)
+          echo "transactions content hash: ${TX_HASH}"
+          echo "tx_hash=${TX_HASH}" >> "$GITHUB_OUTPUT"
+
+          if [ -z "$TX_HASH" ]; then
+            echo "::error::Hash check failed — could not compute content hash for transactions"
             exit 1
           fi
 
@@ -172,7 +211,39 @@ jobs:
             }'
 
       # -----------------------------------------------------------------------
-      # 6. Notify on failure
+      # 6. Append result to docs/DR_TEST_LOG.md
+      # -----------------------------------------------------------------------
+      - name: Append result to DR test log
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+          DURATION="${{ steps.timer_end.outputs.duration }}"
+          RTO_MET="yes"
+          if [ "$DURATION" -gt "$RTO_CEILING_SECONDS" ]; then RTO_MET="no"; fi
+          TRIGGER="${{ github.event_name }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TX_COUNT="${{ steps.integrity.outputs.tx_count }}"
+          TX_HASH="${{ steps.hash_check.outputs.tx_hash }}"
+
+          ROW="| ${DATE} | ${TRIGGER} | passed | ${DURATION}s | ${RTO_MET} | ${TX_COUNT} rows | \`${TX_HASH:0:12}...\` | [run](${RUN_URL}) |"
+
+          awk -v row="$ROW" '
+            /<!-- New rows are appended above this line/ { print row }
+            { print }
+          ' docs/DR_TEST_LOG.md > docs/DR_TEST_LOG.md.tmp
+          mv docs/DR_TEST_LOG.md.tmp docs/DR_TEST_LOG.md
+
+      - name: Commit DR test log
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/DR_TEST_LOG.md
+          if ! git diff --cached --quiet; then
+            git commit -m "docs: record DR restore drill result ($(date -u +%Y-%m-%d))"
+            git push
+          fi
+
+      # -----------------------------------------------------------------------
+      # 7. Notify on failure
       # -----------------------------------------------------------------------
       - name: Notify ERT on failure
         if: failure()
