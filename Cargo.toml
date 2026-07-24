@@ -290,6 +290,31 @@ name = "api_rates_test"
 path = "tests/api_rates_test.rs"
 required-features = ["database"]
 
+[[test]]
+name = "multisig_governance_test"
+path = "tests/multisig_governance_test.rs"
+required-features = ["database"]
+
+[[test]]
+name = "pentest_integration"
+path = "tests/pentest_integration.rs"
+required-features = ["database", "integration"]
+
+[[test]]
+name = "ddos_integration"
+path = "tests/ddos_integration.rs"
+required-features = ["cache"]
+
+[[test]]
+name = "liquidity_integration"
+path = "tests/liquidity_integration.rs"
+required-features = ["database", "integration"]
+
+[[test]]
+name = "liquidity_ml_tests"
+path = "tests/liquidity_ml_tests.rs"
+required-features = ["database"]
+
 # ---------------------------------------------------------------------------
 # Examples
 # ---------------------------------------------------------------------------

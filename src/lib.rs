@@ -156,6 +156,31 @@ pub mod masking;
 #[cfg(feature = "database")]
 pub mod services;
 
+// ── DDoS protection and traffic shaping ───────────────────────────────────────
+#[cfg(feature = "database")]
+pub mod ddos;
+
+// ── Multi-Signature Governance Framework — M-of-N signing for Mint/Burn/SetOptions ──
+#[cfg(feature = "database")]
+pub mod multisig;
+
+// ── Penetration testing & third-party security audit framework ──────────────────
+#[cfg(feature = "database")]
+pub mod pentest;
+
+// ── Liquidity pool architecture ───────────────────────────────────────────────
+#[cfg(feature = "database")]
+pub mod liquidity;
+
+#[cfg(feature = "database")]
+pub mod liquidity_ml;
+
+#[cfg(feature = "database")]
+pub mod lp_onboarding;
+
+#[cfg(feature = "database")]
+pub mod lp_payout;
+
 // ── Multi-region — removed for basic setup ──────────────────────────────────
 // pub mod multi_region;
 

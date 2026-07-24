@@ -8,7 +8,7 @@
 mod tests {
     use serde_json::json;
     use uuid::Uuid;
-    use Bitmesh_backend::multisig::{
+    use aframp_backend::multisig::{
         governance_log::compute_entry_hash,
         models::{MultiSigOpType, MultiSigProposalStatus},
         xdr_builder::{build_burn_xdr, build_mint_xdr, build_set_options_xdr, SetOptionsParams},

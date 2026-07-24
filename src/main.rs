@@ -13,17 +13,17 @@ mod corridors;
 mod config;
 mod config_validation;
 mod database;
-// REMOVED: mod ddos;
+mod ddos;
 // REMOVED: mod developer_portal;
 // REMOVED: mod distributed_api;
 mod error;
 mod health;
-// REMOVED: mod liquidity;
+mod liquidity;
 mod logging;
-// REMOVED: mod lp_onboarding;
-// REMOVED: mod lp_payout;
+mod lp_onboarding;
+mod lp_payout;
 mod metrics;
-// REMOVED: mod multisig;
+mod multisig;
 // REMOVED: mod peg_monitor;
 // REMOVED: mod pep;
 mod middleware;
@@ -31,7 +31,7 @@ mod middleware;
 mod oauth;
 mod payments;
 // REMOVED: mod bug_bounty;
-// REMOVED: mod pentest;
+mod pentest;
 // REMOVED: mod pos;
 mod recurring;
 // REMOVED: mod security_compliance;
@@ -1136,30 +1136,15 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // ── LP Payout Engine (Liquidity Provider rewards) ─────────────────────────
-    let lp_payout_routes = if let (Some(pool), Some(client)) =        (db_pool.clone(), stellar_client.clone())
-    {
+    // NOTE: the Stellar Horizon snapshot + disbursement worker is not wired here —
+    // it lives in `lp_payout::worker`, which depends on the `chains::stellar` module
+    // that is out of scope for this restoration (tracked separately). Only the
+    // read-only reward/epoch routes are enabled below.
+    let lp_payout_routes = if let Some(pool) = db_pool.clone() {
         let lp_repo = std::sync::Arc::new(lp_payout::LpPayoutRepository::new(pool.clone()));
-        let lp_config = lp_payout::LpPayoutWorkerConfig::from_env();
-
-        let lp_worker_enabled = std::env::var("LP_PAYOUT_WORKER_ENABLED")
-            .unwrap_or_else(|_| "true".to_string())
-            .to_lowercase()
-            != "false";
-
-        if lp_worker_enabled {
-            if lp_config.pool_id.is_empty() {
-                warn!("LP_STELLAR_POOL_ID not set — LP payout worker will skip snapshots");
-            }
-            let worker = lp_payout::LpPayoutWorker::new(lp_repo.clone(), client, lp_config);
-            tokio::spawn(worker.run(worker_shutdown_rx.clone()));
-            info!("✅ LP Payout worker started");
-        } else {
-            info!("LP Payout worker disabled (LP_PAYOUT_WORKER_ENABLED=false)");
-        }
-
         lp_payout::lp_payout_routes(lp_repo)
     } else {
-        info!("⏭️  Skipping LP payout routes (missing database or stellar client)");
+        info!("⏭️  Skipping LP payout routes (no database)");
         Router::new()
     };
 
@@ -2675,18 +2660,16 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // ── Multi-Sig Governance routes (Issue: Multi-Sig Governance) ────────────
-    let governance_routes = if let (Some(pool), Some(client)) =
-        (db_pool.clone(), stellar_client.clone())
-    {
+    let governance_routes = if let Some(pool) = db_pool.clone() {
+        let horizon_url = std::env::var("STELLAR_HORIZON_URL")
+            .unwrap_or_else(|_| "https://horizon.stellar.org".to_string());
+        let horizon_client = std::sync::Arc::new(stellar::horizon::HorizonClient::new(horizon_url));
         let repo = std::sync::Arc::new(multisig::repository::MultiSigRepository::new(pool));
-        let svc = std::sync::Arc::new(multisig::MultiSigService::from_env(
-            repo,
-            std::sync::Arc::new(client),
-        ));
+        let svc = std::sync::Arc::new(multisig::MultiSigService::from_env(repo, horizon_client));
         info!("🔐 Multi-sig governance routes enabled");
         multisig::routes::governance_router(svc)
     } else {
-        info!("⏭️  Skipping multi-sig governance routes (missing database or stellar client)");
+        info!("⏭️  Skipping multi-sig governance routes (no database)");
         Router::new()
     };
 
