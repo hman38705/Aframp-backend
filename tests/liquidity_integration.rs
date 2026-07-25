@@ -20,7 +20,7 @@ mod tests {
     use std::str::FromStr;
     use std::sync::Arc;
     use uuid::Uuid;
-    use Bitmesh_backend::liquidity::{
+    use aframp_backend::liquidity::{
         models::*, repository::LiquidityRepository, service::LiquidityService,
         RESERVATION_TIMEOUT_SECS,
     };
