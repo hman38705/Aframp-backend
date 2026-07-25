@@ -276,6 +276,15 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/aframp_test
           REDIS_URL: redis://localhost:6379
         run: cargo test --tests --all-features -- --test-threads=2
+      - name: Check for stale snapshots
+        run: |
+          if ! git diff --quiet --exit-code -- test_snapshots/; then
+            echo "::error::test_snapshots/ changed after running the test suite."
+            echo "Run 'UPDATE_SNAPSHOTS=true cargo test --tests --all-features' locally,"
+            echo "review the diff, and commit the updated snapshot files."
+            git diff --stat -- test_snapshots/
+            exit 1
+          fi
 
   # ── Docker build & push (main branch only) ──────────────────────────────────
   build-push:

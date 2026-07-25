@@ -9,6 +9,15 @@
 #     or the kubeconfig_path variable).
 #   - Helm provider >= 2.12, Kubernetes provider >= 2.27.
 #   - Prometheus already running in the "monitoring" namespace.
+#
+# Remote state:
+#   - State is stored in S3 with DynamoDB locking so multiple engineers can
+#     run Terraform against this module without corrupting state or racing
+#     each other. `bucket` and `dynamodb_table` are intentionally omitted
+#     here (partial backend configuration) and supplied at `terraform init`
+#     time from the TERRAFORM_STATE_BUCKET / TERRAFORM_LOCK_TABLE secrets.
+#     See docs/deployment/PRODUCTION_DEPLOYMENT_RUNBOOK.md for the init
+#     command.
 
 terraform {
   required_version = ">= 1.6"
@@ -21,6 +30,14 @@ terraform {
       source  = "hashicorp/kubernetes"
       version = "~> 2.27"
     }
+  }
+
+  backend "s3" {
+    key     = "aframp-backend/hpa/terraform.tfstate"
+    region  = "af-south-1"
+    encrypt = true
+    # bucket         = supplied via -backend-config from TERRAFORM_STATE_BUCKET
+    # dynamodb_table = supplied via -backend-config from TERRAFORM_LOCK_TABLE
   }
 }
 
