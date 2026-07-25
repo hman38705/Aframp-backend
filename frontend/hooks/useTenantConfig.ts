@@ -31,14 +31,25 @@ function injectTheme(theme: WhitelabelTheme) {
   root.style.setProperty('--font-family', theme.fontFamily || 'Inter, system-ui, sans-serif');
 }
 
-function readCache(): TenantConfig | null {
+function readRawCache(): CachedConfig | null {
   try {
     const raw = sessionStorage.getItem(CACHE_KEY);
     if (!raw) return null;
-    const { config, cachedAt }: CachedConfig = JSON.parse(raw);
-    if (Date.now() - cachedAt > CACHE_TTL_MS) return null;
-    return config;
+    return JSON.parse(raw) as CachedConfig;
   } catch { return null; }
+}
+
+function readCache(): TenantConfig | null {
+  const cached = readRawCache();
+  if (!cached) return null;
+  if (Date.now() - cached.cachedAt > CACHE_TTL_MS) return null;
+  return cached.config;
+}
+
+/** Last-known-good config regardless of TTL — used as a fallback when a refetch fails. */
+function readStaleCache(): TenantConfig | null {
+  const cached = readRawCache();
+  return cached ? cached.config : null;
 }
 
 function writeCache(config: TenantConfig) {
@@ -51,6 +62,7 @@ export function useTenantConfig() {
   const [config, setConfig] = useState<TenantConfig>(DEFAULT_TENANT_CONFIG);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isStale, setIsStale] = useState(false);
 
   useEffect(() => {
     const cached = readCache();
@@ -69,15 +81,22 @@ export function useTenantConfig() {
       .then((data) => {
         writeCache(data);
         setConfig(data);
+        setIsStale(false);
         injectTheme(data.theme);
       })
       .catch((err) => {
         setError(err.message);
-        // Graceful fallback — use defaults so UI never breaks
-        injectTheme(DEFAULT_TENANT_CONFIG.theme);
+
+        // Prefer the last-known-good config over hard-coded defaults so a
+        // returning tenant keeps their branding even if the refetch failed.
+        const lastKnownGood = readStaleCache();
+        const fallback = lastKnownGood ?? DEFAULT_TENANT_CONFIG;
+        setConfig(fallback);
+        setIsStale(true);
+        injectTheme(fallback.theme);
       })
       .finally(() => setLoading(false));
   }, []);
 
-  return { config, loading, error };
+  return { config, loading, error, isStale };
 }

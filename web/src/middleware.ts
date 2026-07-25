@@ -45,11 +45,43 @@ const intlMiddleware = createMiddleware({
 });
 
 // ============================================================================
+// Content Security Policy
+// ============================================================================
+
+function buildCspHeader(nonce: string): string {
+  const isDev = process.env.NODE_ENV === 'development';
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+
+  const csp = `
+    default-src 'self';
+    script-src 'self' 'nonce-${nonce}'${isDev ? " 'unsafe-eval'" : ''};
+    style-src 'self' 'unsafe-inline';
+    img-src 'self' data: blob:;
+    font-src 'self' data:;
+    connect-src 'self' ${apiUrl};
+    frame-ancestors 'none';
+    base-uri 'self';
+    form-action 'self';
+    object-src 'none';
+    ${isDev ? '' : 'upgrade-insecure-requests;'}
+  `;
+
+  return csp.replace(/\s{2,}/g, ' ').trim();
+}
+
+function withCsp(response: NextResponse, csp: string): NextResponse {
+  response.headers.set('Content-Security-Policy', csp);
+  return response;
+}
+
+// ============================================================================
 // Main Middleware
 // ============================================================================
 
 export default async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  const nonce = Buffer.from(crypto.randomUUID()).toString('base64');
+  const csp = buildCspHeader(nonce);
 
   // Apply internationalization
   const response = intlMiddleware(request);
@@ -68,7 +100,7 @@ export default async function middleware(request: NextRequest) {
 
   // Public routes - allow access
   if (PUBLIC_ROUTES.some((route) => pathWithoutLocale.startsWith(route))) {
-    return response;
+    return withCsp(response, csp);
   }
 
   // Protected routes - require authentication
@@ -78,36 +110,36 @@ export default async function middleware(request: NextRequest) {
       request.url
     );
     loginUrl.searchParams.set('redirect', pathname);
-    return NextResponse.redirect(loginUrl);
+    return withCsp(NextResponse.redirect(loginUrl), csp);
   }
 
   // KYC enforcement
   if (KYC_REQUIRED_ROUTES.some((route) => pathWithoutLocale.startsWith(route))) {
     const kycStatus = request.cookies.get('aframp_kyc_status')?.value;
-    
+
     if (kycStatus !== 'approved') {
       const kycUrl = new URL(
         pathnameLocale ? `/${pathnameLocale}/onboarding/kyc` : '/onboarding/kyc',
         request.url
       );
-      return NextResponse.redirect(kycUrl);
+      return withCsp(NextResponse.redirect(kycUrl), csp);
     }
   }
 
   // KYB enforcement for partner/merchant routes
   if (KYB_REQUIRED_ROUTES.some((route) => pathWithoutLocale.startsWith(route))) {
     const kybStatus = request.cookies.get('aframp_kyb_status')?.value;
-    
+
     if (kybStatus !== 'approved') {
       const kybUrl = new URL(
         pathnameLocale ? `/${pathnameLocale}/onboarding/kyb` : '/onboarding/kyb',
         request.url
       );
-      return NextResponse.redirect(kybUrl);
+      return withCsp(NextResponse.redirect(kybUrl), csp);
     }
   }
 
-  return response;
+  return withCsp(response, csp);
 }
 
 export const config = {

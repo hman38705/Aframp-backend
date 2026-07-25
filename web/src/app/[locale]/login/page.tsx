@@ -3,8 +3,9 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useLoginMutation } from '@/hooks/useAuthMutations';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
-export default function LoginPage() {
+function LoginContent() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -66,5 +67,13 @@ export default function LoginPage() {
         </button>
       </form>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <ErrorBoundary>
+      <LoginContent />
+    </ErrorBoundary>
   );
 }

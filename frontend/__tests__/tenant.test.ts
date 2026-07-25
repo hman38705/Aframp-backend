@@ -111,3 +111,76 @@ describe('substituteText', () => {
     expect(result).toBe('foo and bar');
   });
 });
+
+// ── Issue #808 — Unknown tenant resolution + config fallback (integration) ────
+//
+// Mirrors frontend/middleware/tenant-resolver.ts (host → tenant id resolution)
+// and frontend/hooks/useTenantConfig.ts (fetch-failure fallback selection),
+// exercised together end-to-end for the "unknown tenant" path.
+
+interface ResolvedTenant { tenantId: string; isUnknown: boolean }
+
+const TENANT_MAP: Record<string, string> = {
+  'app.aframp.io': 'aframp',
+  'pay.zenithbank.com': 'zenith',
+  'remit.uba.africa': 'uba',
+};
+
+function resolveTenantId(host: string, partnerDomain?: string): ResolvedTenant {
+  if (partnerDomain && TENANT_MAP[partnerDomain]) return { tenantId: TENANT_MAP[partnerDomain], isUnknown: false };
+
+  const cleanHost = host.split(':')[0];
+  if (TENANT_MAP[cleanHost]) return { tenantId: TENANT_MAP[cleanHost], isUnknown: false };
+
+  const subdomain = cleanHost.split('.')[0];
+  if (subdomain && subdomain !== 'www' && subdomain !== 'app') return { tenantId: subdomain, isUnknown: false };
+
+  return { tenantId: 'default', isUnknown: true };
+}
+
+interface DefaultTenantConfig { theme: { tenantId: string } }
+
+const DEFAULT_TENANT_CONFIG: DefaultTenantConfig = { theme: { tenantId: 'default' } };
+
+/** Mirrors useTenantConfig's error-path fallback: prefer last-known-good cache over hard-coded defaults. */
+function selectFallbackConfig(lastKnownGood: DefaultTenantConfig | null): { config: DefaultTenantConfig; isStale: boolean } {
+  return { config: lastKnownGood ?? DEFAULT_TENANT_CONFIG, isStale: true };
+}
+
+describe('unknown tenant resolution + config fallback (integration)', () => {
+  it('flags a bare apex host as an unknown tenant', () => {
+    const resolved = resolveTenantId('aframp.io');
+    expect(resolved.tenantId).toBe('default');
+    expect(resolved.isUnknown).toBe(true);
+  });
+
+  it('flags localhost as an unknown tenant', () => {
+    const resolved = resolveTenantId('localhost:3000');
+    expect(resolved.tenantId).toBe('default');
+    expect(resolved.isUnknown).toBe(true);
+  });
+
+  it('does not flag a known mapped host as unknown', () => {
+    const resolved = resolveTenantId('app.aframp.io');
+    expect(resolved.tenantId).toBe('aframp');
+    expect(resolved.isUnknown).toBe(false);
+  });
+
+  it('falls back to the cached last-known-good config when the tenant is unknown and the refetch fails', () => {
+    const { tenantId, isUnknown } = resolveTenantId('aframp.io');
+    expect(isUnknown).toBe(true);
+
+    const cachedFromEarlierSession: DefaultTenantConfig = { theme: { tenantId: 'zenith' } };
+    const { config, isStale } = selectFallbackConfig(cachedFromEarlierSession);
+
+    expect(config.theme.tenantId).toBe('zenith');
+    expect(isStale).toBe(true);
+    expect(tenantId).toBe('default');
+  });
+
+  it('falls back to the hard-coded default config when there is no cache at all', () => {
+    const { config, isStale } = selectFallbackConfig(null);
+    expect(config).toBe(DEFAULT_TENANT_CONFIG);
+    expect(isStale).toBe(true);
+  });
+});
