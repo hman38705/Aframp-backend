@@ -2,6 +2,7 @@
 
 import { RequireAuth } from '@/components/auth/RequireAuth';
 import { RequireKYC } from '@/components/auth/RequireKYC';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 function WalletContent() {
   return (
@@ -25,7 +26,9 @@ export default function WalletPage() {
   return (
     <RequireAuth>
       <RequireKYC level="KYC_Level_1">
-        <WalletContent />
+        <ErrorBoundary>
+          <WalletContent />
+        </ErrorBoundary>
       </RequireKYC>
     </RequireAuth>
   );

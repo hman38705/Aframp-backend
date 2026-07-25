@@ -3,6 +3,7 @@
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLogoutMutation } from '@/hooks/useAuthMutations';
 import { RequireAuth } from '@/components/auth/RequireAuth';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 function DashboardContent() {
   const { state } = useAuth();
@@ -62,7 +63,9 @@ function DashboardContent() {
 export default function DashboardPage() {
   return (
     <RequireAuth>
-      <DashboardContent />
+      <ErrorBoundary>
+        <DashboardContent />
+      </ErrorBoundary>
     </RequireAuth>
   );
 }
