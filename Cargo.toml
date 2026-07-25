@@ -13,7 +13,7 @@ crate-type = ["cdylib", "rlib"]
 # Feature flags
 # ---------------------------------------------------------------------------
 [features]
-default = []
+default = ["jemalloc", "database", "cache", "telemetry"]
 integration = []
 # Memory allocator features
 jemalloc = ["dep:tikv-jemallocator"]
