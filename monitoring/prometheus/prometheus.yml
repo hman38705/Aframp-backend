@@ -34,3 +34,12 @@ scrape_configs:
     static_configs:
       - targets: ["localhost:9090"]
     scrape_interval: 30s
+
+  # Nginx edge proxy — connection/throughput metrics via nginx-prometheus-exporter,
+  # scraping the stub_status endpoint exposed at /nginx_status.
+  # Rate-limit rejection counts (nginx_rate_limit_rejections_total) arrive
+  # separately via the Vector log_to_metric pipeline. See docs/RATE_LIMITING.md.
+  - job_name: "nginx"
+    static_configs:
+      - targets: ["nginx-exporter:9113"]
+    scrape_interval: 15s

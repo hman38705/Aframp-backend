@@ -64,11 +64,10 @@ spec:
           containerPort: 9090
           protocol: TCP
         
+        envFrom:
+        - configMapRef:
+            name: aframp-config
         env:
-        - name: RUST_LOG
-          value: "info,aframp=debug"
-        - name: ENVIRONMENT
-          value: "production"
         - name: DATABASE_URL
           valueFrom:
             secretKeyRef:
@@ -84,11 +83,7 @@ spec:
             secretKeyRef:
               name: jwt-secret
               key: secret
-        - name: STELLAR_NETWORK
-          value: "public"
-        - name: HORIZON_URL
-          value: "https://horizon.stellar.org"
-        
+
         resources:
           requests:
             cpu: "1000m"
@@ -177,11 +172,10 @@ spec:
           containerPort: 9090
           protocol: TCP
         
+        envFrom:
+        - configMapRef:
+            name: aframp-config
         env:
-        - name: RUST_LOG
-          value: "info,aframp=debug"
-        - name: ENVIRONMENT
-          value: "production"
         - name: DATABASE_URL
           valueFrom:
             secretKeyRef:
@@ -192,9 +186,7 @@ spec:
             secretKeyRef:
               name: redis-credentials
               key: url
-        - name: WORKER_CONCURRENCY
-          value: "10"
-        
+
         resources:
           requests:
             cpu: "500m"

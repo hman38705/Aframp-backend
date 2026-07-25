@@ -327,6 +327,28 @@
           {"format": "ops", "label": "Logs/sec"},
           {"format": "short"}
         ]
+      },
+      {
+        "id": 13,
+        "title": "Nginx Rate Limiting",
+        "type": "graph",
+        "gridPos": {"x": 0, "y": 48, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "rate(nginx_rate_limit_rejections_total{status=\"REJECTED\"}[5m])",
+            "legendFormat": "Nginx coarse-DDoS rejections",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(aframp_rate_limit_breaches_total[5m])",
+            "legendFormat": "App-level rate-limit breaches",
+            "refId": "B"
+          }
+        ],
+        "yaxes": [
+          {"format": "ops", "label": "Rejections/sec"},
+          {"format": "short"}
+        ]
       }
     ],
     "templating": {
