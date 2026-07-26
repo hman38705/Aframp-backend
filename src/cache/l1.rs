@@ -131,6 +131,21 @@ impl L1Shard {
     pub fn entry_count(&self) -> u64 {
         self.inner.entry_count()
     }
+
+    /// Keys currently in this shard that start with `prefix`.
+    /// Used for admin-triggered prefix invalidation.
+    pub fn keys_with_prefix(&self, prefix: &str) -> Vec<String> {
+        self.inner
+            .iter()
+            .filter_map(|(k, _v)| {
+                if k.starts_with(prefix) {
+                    Some((*k).clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
 }
 
 /// The full L1 cache, composed of per-category shards.

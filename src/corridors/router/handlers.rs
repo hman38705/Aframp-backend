@@ -1,5 +1,6 @@
 //! HTTP handlers for the Corridor Router API.
 
+use crate::cache::multi_level::MultiLevelCache;
 use crate::corridors::router::models::*;
 use crate::corridors::router::service::{CorridorRouterService, RouterError};
 use axum::{
@@ -13,6 +14,21 @@ use uuid::Uuid;
 
 pub struct CorridorRouterState {
     pub service: Arc<CorridorRouterService>,
+    /// Optional — when present, corridor create/update/toggle mutations
+    /// invalidate the `corridor:` cache prefix and log to
+    /// `cache_invalidation_logs` (Issue: admin cache invalidation).
+    pub cache: Option<Arc<MultiLevelCache>>,
+    pub pool: Option<Arc<sqlx::PgPool>>,
+}
+
+/// Best-effort cache invalidation after a corridor mutation — logged but
+/// never fails the request if the cache/pool aren't configured.
+async fn invalidate_corridor_cache(state: &CorridorRouterState, reason: &str) {
+    if let (Some(cache), Some(pool)) = (&state.cache, &state.pool) {
+        cache
+            .invalidate_prefix_logged(pool, "corridor:", None, "system", reason)
+            .await;
+    }
 }
 
 // ── Generic wrappers ──────────────────────────────────────────────────────────
@@ -135,12 +151,17 @@ pub async fn create_corridor_handler(
     State(state): State<Arc<CorridorRouterState>>,
     Json(req): Json<CreateCorridorConfigRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<CorridorConfig>>), (StatusCode, Json<ApiError>)> {
-    state
+    let result = state
         .service
         .create_corridor(&req, None, None)
         .await
         .map(|c| (StatusCode::CREATED, ok_msg(c, "Corridor created")))
-        .map_err(map_error)
+        .map_err(map_error);
+
+    if result.is_ok() {
+        invalidate_corridor_cache(&state, "corridor_created").await;
+    }
+    result
 }
 
 /// PATCH /api/admin/corridors/:id
@@ -150,12 +171,17 @@ pub async fn update_corridor_handler(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateCorridorConfigRequest>,
 ) -> Result<Json<ApiResponse<CorridorConfig>>, (StatusCode, Json<ApiError>)> {
-    state
+    let result = state
         .service
         .update_corridor(id, &req, None, None)
         .await
         .map(ok)
-        .map_err(map_error)
+        .map_err(map_error);
+
+    if result.is_ok() {
+        invalidate_corridor_cache(&state, "corridor_updated").await;
+    }
+    result
 }
 
 /// POST /api/admin/corridors/:id/toggle
@@ -171,7 +197,7 @@ pub async fn toggle_corridor_handler(
         "Corridor suspended (kill-switch activated)"
     };
 
-    state
+    let result = state
         .service
         .toggle_corridor(id, &req, None)
         .await
@@ -182,5 +208,10 @@ pub async fn toggle_corridor_handler(
                 message: Some(msg.to_string()),
             })
         })
-        .map_err(map_error)
+        .map_err(map_error);
+
+    if result.is_ok() {
+        invalidate_corridor_cache(&state, "corridor_toggled").await;
+    }
+    result
 }

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 #[cfg(feature = "database")]
-// REMOVED: use crate::chains::stellar::errors::StellarError;
+use crate::chains::stellar::errors::StellarError;
 
 /// CNGN-specific error codes for programmatic handling
 #[cfg(feature = "database")]

@@ -6,11 +6,14 @@
 // Module declarations
 mod api;
 mod api_keys;
+mod aml;
 mod analytics;
-mod app_state;
 mod audit;
 mod auth;
+mod banking;
 mod cache;
+mod chains;
+mod compliance_effectiveness;
 mod config;
 mod config_validation;
 mod corridors;
@@ -19,6 +22,7 @@ mod ddos;
 // REMOVED: mod developer_portal;
 // REMOVED: mod distributed_api;
 mod error;
+mod event_bus;
 mod health;
 mod liquidity;
 mod logging;
@@ -29,10 +33,6 @@ mod multisig;
 // REMOVED: mod peg_monitor;
 // REMOVED: mod pep;
 mod developer_portal;
-mod error;
-mod health;
-mod logging;
-mod metrics;
 mod middleware;
 mod oauth;
 mod oracle;
@@ -41,9 +41,12 @@ mod payments;
 mod pentest;
 // REMOVED: mod pos;
 mod recurring;
+mod reporting;
 mod routes;
+mod sanctions;
+mod security;
 mod services;
-mod startup;
+mod stellar;
 mod telemetry;
 mod verification;
 mod wallet;
@@ -51,57 +54,430 @@ mod wallet_provisioning;
 mod workers;
 
 // External imports
+use std::sync::Arc;
+use crate::config::AppConfig;
+use crate::health::{HealthChecker, HealthStatus};
+use crate::telemetry::tracer::{init_tracer, shutdown_tracer};
+use crate::payments::factory::PaymentProviderFactory;
+use crate::payments::types::{
+    CustomerContact, Money, PaymentMethod, PaymentRequest as ProviderPaymentRequest, ProviderName,
+};
+use axum::{
+    routing::{delete, get, patch, post},
+    Json, Router,
+};
+use cache::{init_cache_pool, build_multi_level_cache, CacheConfig, RedisCache};
+use cache::warmer::{warm_caches, WarmingState};
+use chains::stellar::client::StellarClient;
+use chains::stellar::config::StellarConfig;
+use database::{init_pool, PoolConfig};
 use dotenv::dotenv;
-use tracing::{error, info};
+use middleware::logging::{request_logging_middleware, UuidRequestId};
+use middleware::metrics::metrics_middleware;
+use middleware::cors::{cors_middleware, CorsConfig};
+use middleware::security::security_headers_middleware;
+use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
+use std::str::FromStr;
+use std::time::Duration;
+use tokio::signal;
+use tokio::sync::watch;
+use tower::ServiceBuilder;
+use tower_http::request_id::{PropagateRequestIdLayer, SetRequestIdLayer};
+use tracing::{error, info, warn};
+use uuid::Uuid;
 
-/// Main entry point
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // Load environment variables
-    dotenv().ok();
-    
-    // Load application configuration
-    let app_config = load_app_config()?;
-    
-    // Validate production configuration
-    validate_production_config()?;
-    
-    // Start the application
-    match startup::start_app(app_config).await {
-        Ok(_) => {
-            info!("👋 Application shutdown completed successfully");
-            Ok(())
+/// Graceful shutdown signal handler
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(e) = signal::ctrl_c().await {
+            error!("failed to install Ctrl+C handler: {}", e);
         }
-        Err(e) => {
-            error!("❌ Application failed to start: {}", e);
-            Err(e)
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(e) => {
+                error!("failed to install signal handler: {}", e);
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    info!("Shutdown signal received, starting graceful shutdown");
+}
+
+async fn shutdown_signal_with_notify(shutdown_tx: watch::Sender<bool>) {
+    shutdown_signal().await;
+    let _ = shutdown_tx.send(true);
+}
+
+/// Validate production configuration — fatal outside development, warning-only in development.
+fn validate_production_config() -> anyhow::Result<()> {
+    info!("🔍 Validating production configuration...");
+
+    if let Err(e) = config_validation::validate_production_config() {
+        let app_env = std::env::var("APP_ENV").unwrap_or_else(|_| "development".into());
+        if app_env != "development" {
+            error!("❌ {}", e);
+            std::process::exit(1);
+        } else {
+            info!("⚠️  Config warnings (non-fatal in development):\n{}", e);
         }
     }
+
+    Ok(())
 }
 
 /// Load application configuration from environment
 fn load_app_config() -> anyhow::Result<config::AppConfig> {
     info!("📝 Loading application configuration...");
-    
+
     let app_config = config::AppConfig::from_env().map_err(|e| {
         error!("❌ Failed to load application configuration: {}", e);
         anyhow::anyhow!("Configuration error: {}", e)
     })?;
-    
+
     app_config.validate().map_err(|e| {
         error!("❌ Configuration validation failed: {}", e);
         anyhow::anyhow!("Configuration validation error: {}", e)
     })?;
-    
+
     info!(
         version = env!("CARGO_PKG_VERSION"),
         environment = %app_config.telemetry.environment,
         service = %app_config.telemetry.service_name,
         "✅ Configuration loaded successfully"
     );
-    
+
     Ok(app_config)
 }
+
+/// Main entry point
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // Initialise advanced tracing
+    logging::init_tracing();
+
+    // Initialise Prometheus metrics registry
+    let _ = metrics::registry();
+
+    // Load environment variables
+    dotenv().ok();
+
+    // Load application configuration
+    let app_config = load_app_config()?;
+
+    // Validate production configuration
+    validate_production_config()?;
+
+    // -------------------------------------------------------------------------
+    // Initialise OpenTelemetry tracer provider.   (Issue #104)
+    // -------------------------------------------------------------------------
+    init_tracer(&app_config.telemetry).map_err(|e| {
+        error!("❌ Failed to initialise OpenTelemetry tracer: {}", e);
+        anyhow::anyhow!("Tracer initialisation error: {}", e)
+    })?;
+
+    let skip_externals = std::env::var("SKIP_EXTERNALS")
+        .unwrap_or_else(|_| "false".to_string())
+        .to_lowercase()
+        == "true";
+
+    info!(
+        version = env!("CARGO_PKG_VERSION"),
+        environment = %app_config.telemetry.environment,
+        service = %app_config.telemetry.service_name,
+        sampling_rate = app_config.telemetry.sampling_rate,
+        "🚀 Starting Aframp backend service"
+    );
+
+    let server_host = std::env::var("SERVER_HOST")
+        .or_else(|_| std::env::var("HOST"))
+        .unwrap_or_else(|_| "127.0.0.1".to_string());
+    let server_port = std::env::var("SERVER_PORT")
+        .or_else(|_| std::env::var("PORT"))
+        .unwrap_or_else(|_| "8000".to_string());
+
+    info!(
+        host = %server_host,
+        port = %server_port,
+        "Server configuration loaded"
+    );
+
+    // Initialize database connection pool
+    let db_pool = if skip_externals {
+        info!("⏭️  Skipping database initialization (SKIP_EXTERNALS=true)");
+        None
+    } else {
+        info!("📊 Initializing database connection pool...");
+        let database_url =
+            std::env::var("DATABASE_URL").map_err(|_| anyhow::anyhow!("DATABASE_URL not set"))?;
+        let db_pool_config = PoolConfig {
+            max_connections: std::env::var("DB_MAX_CONNECTIONS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(20),
+            min_connections: std::env::var("DB_MIN_CONNECTIONS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5),
+            connection_timeout: Duration::from_secs(
+                std::env::var("DB_CONNECTION_TIMEOUT")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(30),
+            ),
+            idle_timeout: Duration::from_secs(
+                std::env::var("DB_IDLE_TIMEOUT")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(600),
+            ),
+            max_lifetime: Duration::from_secs(
+                std::env::var("DB_MAX_LIFETIME")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(1800),
+            ),
+        };
+
+        let db_pool = init_pool(&database_url, Some(db_pool_config.clone()))
+            .await
+            .map_err(|e| {
+                error!("Failed to initialize database pool: {}", e);
+                e
+            })?;
+
+        if let Some(replica_url) = app_config.database.read_replica_url.clone() {
+            match init_pool(&replica_url, Some(db_pool_config.clone())).await {
+                Ok(replica_pool) => {
+                    database::set_global_read_replica_pool(replica_pool.clone());
+                    info!(replica_url=%replica_url, "✅ Read replica pool configured");
+                }
+                Err(e) => {
+                    warn!(read_replica_url=%replica_url, error=%e, "Failed to initialize read replica pool, continuing with primary only")
+                }
+            }
+        }
+
+        if !app_config.database.shard_configs.is_empty() {
+            let shards = app_config
+                .database
+                .shard_configs
+                .iter()
+                .map(|cfg| database::ha_pool::ShardConfig {
+                    shard_id: cfg.shard_id,
+                    primary_url: cfg.primary_url.clone(),
+                    replica_urls: cfg.replica_urls.clone(),
+                    max_connections: cfg
+                        .max_connections
+                        .unwrap_or(db_pool_config.max_connections),
+                    min_connections: cfg
+                        .min_connections
+                        .unwrap_or(db_pool_config.min_connections),
+                    connection_timeout: Duration::from_secs(
+                        cfg.connection_timeout_secs
+                            .unwrap_or(db_pool_config.connection_timeout.as_secs()),
+                    ),
+                })
+                .collect();
+            let ha_config = database::ha_pool::HaPoolConfig {
+                shards,
+                checksum_interval: Duration::from_secs(app_config.database.shard_checksum_interval_secs),
+            };
+            match database::ha_pool::HaPoolManager::new(&ha_config).await {
+                Ok(manager) => {
+                    database::set_global_ha_pool(manager.clone());
+                    info!(shard_count = manager.shard_count.load(std::sync::atomic::Ordering::Relaxed), "✅ HA shard manager configured");
+                }
+                Err(e) => {
+                    warn!(error=%e, "Failed to initialize HA shard manager, continuing without sharding");
+                }
+            }
+        }
+
+        info!(
+            max_connections = db_pool.options().get_max_connections(),
+            "✅ Database connection pool initialized"
+        );
+        Some(db_pool)
+    };
+
+    // ── Initialize Security Anomaly Detection & Circuit Breaker (Issue #297) ──
+    let (anomaly_service, circuit_breaker) = if let Some(ref pool) = db_pool {
+        let sec_config = crate::security::AnomalyDetectionConfig::from_env();
+        let service = std::sync::Arc::new(crate::security::AnomalyDetectionService::new(
+            pool.clone(),
+            sec_config,
+        ));
+        let middleware = std::sync::Arc::new(crate::security::CircuitBreakerMiddleware::new(
+            service.clone(),
+        ));
+        info!("✅ AnomalyDetectionService and CircuitBreakerMiddleware initialized");
+        (Some(service), Some(middleware))
+    } else {
+        (None, None)
+    };
+
+    // Initialize cache connection pool
+    let redis_cache = if skip_externals {
+        info!("⏭️  Skipping Redis initialization (SKIP_EXTERNALS=true)");
+        None
+    } else {
+        info!("🔄 Initializing Redis cache connection pool...");
+        let redis_url =
+            std::env::var("REDIS_URL").map_err(|_| anyhow::anyhow!("REDIS_URL not set"))?;
+
+        let cache_config = CacheConfig {
+            redis_url: redis_url.clone(),
+            max_connections: std::env::var("CACHE_MAX_CONNECTIONS")
+                .or_else(|_| std::env::var("REDIS_MAX_CONNECTIONS"))
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(20),
+            min_idle: std::env::var("REDIS_MIN_IDLE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5),
+            connection_timeout: Duration::from_secs(
+                std::env::var("REDIS_CONNECTION_TIMEOUT")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(5),
+            ),
+            max_lifetime: Duration::from_secs(
+                std::env::var("REDIS_MAX_LIFETIME")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(300),
+            ),
+            idle_timeout: Duration::from_secs(
+                std::env::var("REDIS_IDLE_TIMEOUT")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(60),
+            ),
+            health_check_interval: Duration::from_secs(
+                std::env::var("REDIS_HEALTH_CHECK_INTERVAL")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(30),
+            ),
+        };
+
+        let cache_pool = init_cache_pool(cache_config).await.map_err(|e| {
+            error!("Failed to initialize cache pool: {}", e);
+            e
+        })?;
+
+        let redis_cache = RedisCache::new(cache_pool);
+        info!(redis_url = %redis_url, "✅ Cache connection pool initialized");
+        Some(redis_cache)
+    };
+
+    // Initialize Stellar client.
+    //
+    // NOTE: `chains::stellar::client::StellarClient` is a compatibility shim
+    // (see src/chains/) wrapping the newer `stellar::horizon::HorizonClient`.
+    // It restores enough of the historical API surface for this crate to
+    // compile against the ~30 files that reference it, but has NOT been
+    // exhaustively verified against every call site's exact behavior — some
+    // methods are best-effort. Treat as a known follow-up, not load-bearing
+    // for correctness-critical paths until reviewed with a compiler at hand.
+    let stellar_client = if skip_externals {
+        info!("⏭️  Skipping Stellar initialization (SKIP_EXTERNALS=true)");
+        None
+    } else {
+        info!("⭐ Initializing Stellar client...");
+        let stellar_config = StellarConfig::from_env().map_err(|e| {
+            error!("❌ Failed to load Stellar configuration: {}", e);
+            e
+        })?;
+
+        info!(
+            network = ?stellar_config.network,
+            timeout_secs = stellar_config.request_timeout.as_secs(),
+            max_retries = stellar_config.max_retries,
+            "Stellar configuration loaded"
+        );
+
+        match StellarClient::new(stellar_config) {
+            Ok(stellar_client) => {
+                info!("✅ Stellar client initialized successfully");
+                Some(stellar_client)
+            }
+            Err(e) => {
+                error!("❌ Failed to initialize Stellar client: {}", e);
+                None
+            }
+        }
+    };
+
+    // Initialize health checker
+    info!("🏥 Initializing health checker...");
+    let warming_state = WarmingState::new();
+    let health_checker =
+        HealthChecker::new(db_pool.clone(), redis_cache.clone(), stellar_client.clone())
+            .with_warming_state(warming_state.clone());
+
+    // Spawn background task to update DB pool connection gauge every 15 seconds
+    if let Some(pool) = db_pool.clone() {
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(15));
+            loop {
+                ticker.tick().await;
+                let stats = database::get_pool_stats(&pool);
+                metrics::database::connections_active()
+                    .with_label_values(&["primary"])
+                    .set((stats.size - stats.num_idle) as f64);
+            }
+        });
+    }
+
+    // Initialize notification service
+    let notification_service = std::sync::Arc::new(services::notification::NotificationService::new());
+
+    // ── Audit logging system (Issue #183) ─────────────────────────────────────
+    let audit_writer = if let (Some(ref pool), Some(ref redis_pool)) = (&db_pool, &redis_cache) {
+        let audit_repo = std::sync::Arc::new(audit::repository::AuditLogRepository::new(pool.clone()));
+        let audit_streamer = std::sync::Arc::new(audit::streaming::AuditStreamer::new(redis_pool.pool.clone()));
+        let buffer_size: usize = std::env::var("AUDIT_WRITER_BUFFER_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(4096);
+        let (writer, rx) = audit::writer::AuditWriter::new(
+            audit_repo.clone(),
+            audit_streamer.clone(),
+            Some(buffer_size),
+        );
+        let writer = std::sync::Arc::new(writer);
+        tokio::spawn(audit::writer::run_writer_task(audit_repo, audit_streamer, rx));
+        info!("✅ Audit logging writer started (buffer={})", buffer_size);
+        Some(writer)
+    } else {
+        info!("⏭️  Skipping audit writer (no database/redis)");
+        None
+    };
+
+    let mint_audit_store = std::sync::Arc::new(
+        crate::audit::MintAuditStore::from_env().map_err(|e| {
+            error!("Mint audit store initialization failed: {}", e);
+            anyhow::anyhow!("Mint audit store initialization failed: {}", e)
+        })?,
+    );
 
     // ── Multi-level cache — built ONCE, shared by warming, admin, CDN, pipelines ──
     let shared_ml_cache: Option<std::sync::Arc<cache::MultiLevelCache>> =
@@ -681,19 +1057,6 @@ fn load_app_config() -> anyhow::Result<config::AppConfig> {
             .merge(lp_onboarding::routes::webhook_routes(svc))
     } else {
         info!("⏭️  Skipping LP onboarding routes (no database)");
-        Router::new()
-    };
-
-    // ── Merchant Multi-Sig & Treasury Controls (Issue #336) ──────────────────
-    let merchant_multisig_routes = if let Some(pool) = db_pool.clone() {
-        let svc = std::sync::Arc::new(merchant_multisig::MerchantMultisigService::new(
-            pool,
-            audit_writer.clone(),
-        ));
-        info!("✅ Merchant Multi-Sig routes enabled");
-        merchant_multisig::merchant_multisig_routes(svc)
-    } else {
-        info!("⏭️  Skipping merchant multisig routes (no database)");
         Router::new()
     };
 
@@ -1285,19 +1648,6 @@ fn load_app_config() -> anyhow::Result<config::AppConfig> {
             );
             tokio::spawn(worker.run(worker_shutdown_rx.clone()));
             info!("✅ IP detection worker started");
-/// Validate production configuration
-fn validate_production_config() -> anyhow::Result<()> {
-    info!("🔍 Validating production configuration...");
-    
-    if let Err(e) = config_validation::validate_production_config() {
-        let app_env = std::env::var("APP_ENV").unwrap_or_else(|_| "development".into());
-        if app_env != "development" {
-            error!("❌ {}", e);
-            std::process::exit(1);
-        } else {
-            info!("⚠️  Config warnings (non-fatal in development):\n{}", e);
-        }
-    }
 
     // ── Batch transaction routes (Issue #125) ────────────────────────────────
     let batch_routes = if let Some(pool) = db_pool.clone() {
@@ -1455,149 +1805,6 @@ fn validate_production_config() -> anyhow::Result<()> {
         Router::new()
     };
 
-    // ── Security compliance admin routes ──────────────────────────────────────
-    let security_compliance_routes = if let Some(ref pool) = db_pool {
-        let sec_cfg = crate::security_compliance::config::SecurityComplianceConfig::from_env();
-        let sec_repo = crate::security_compliance::repository::SecurityComplianceRepository::new(pool.clone());
-        let sec_state = crate::security_compliance::handlers::SecurityComplianceState {
-            repo: std::sync::Arc::new(sec_repo),
-            config: std::sync::Arc::new(sec_cfg),
-        };
-        Router::new()
-            .route(
-                "/api/admin/security/vulnerabilities",
-                get(crate::security_compliance::handlers::list_vulnerabilities),
-            )
-            .route(
-                "/api/admin/security/vulnerabilities/:vuln_id",
-                get(crate::security_compliance::handlers::get_vulnerability),
-            )
-            .route(
-                "/api/admin/security/vulnerabilities/:vuln_id/acknowledge",
-                post(crate::security_compliance::handlers::acknowledge_vulnerability),
-            )
-            .route(
-                "/api/admin/security/vulnerabilities/:vuln_id/resolve",
-                post(crate::security_compliance::handlers::resolve_vulnerability),
-            )
-            .route(
-                "/api/admin/security/vulnerabilities/:vuln_id/accept-risk",
-                post(crate::security_compliance::handlers::accept_risk),
-            )
-            .route(
-                "/api/admin/security/compliance/posture",
-                get(crate::security_compliance::handlers::get_posture),
-            )
-            .route(
-                "/api/admin/security/findings/ingest",
-                post(crate::security_compliance::handlers::ingest_finding),
-            )
-            .route(
-                "/api/admin/security/allowlist",
-                get(crate::security_compliance::handlers::list_allowlist)
-                    .post(crate::security_compliance::handlers::add_allowlist_entry),
-            )
-            .route(
-                "/api/admin/security/reports",
-                get(crate::security_compliance::handlers::list_reports),
-            )
-            .with_state(sec_state)
-    } else {
-        Router::new()
-    };
-
-    // ── mTLS certificate lifecycle — Issue #204 ───────────────────────────────
-    // Provision the intermediate CA and start the lifecycle worker.
-    // The admin routes are always available (they operate on the in-memory store).
-    let mtls_admin_routes = {
-        use mtls::{
-            MtlsConfig, IntermediateCa, CertificateStore, CertificateProvisioner,
-            RevocationService, CertLifecycleWorker,
-        };        use mtls::revocation::RevocationList;
-        use mtls::admin::{MtlsAdminState, mtls_admin_routes};
-
-        let mtls_config = MtlsConfig::from_env().unwrap_or_else(|e| {
-            tracing::warn!("mTLS config error (using defaults): {}", e);
-            MtlsConfig::from_env().unwrap_or_else(|_| MtlsConfig {
-                service_name: "aframp-backend".to_string(),
-                environment: std::env::var("APP_ENV").unwrap_or_else(|_| "development".to_string()),
-                leaf_cert_validity: std::time::Duration::from_secs(90 * 86400),
-                intermediate_cert_validity: std::time::Duration::from_secs(730 * 86400),
-                rotation_threshold_days: 14,
-                alert_threshold_days: 7,
-                intermediate_ca_cert_pem: String::new(),
-                intermediate_ca_key_pem: String::new(),
-                root_ca_cert_pem: String::new(),
-                ca_distribution_url: String::new(),
-                enforce_mtls: false,
-            })
-        });
-
-        // Register mTLS Prometheus metrics
-        mtls::metrics::register(prometheus::default_registry());
-
-        let cert_store = CertificateStore::new();
-        let crl = RevocationList::new();
-        let revocation_svc = std::sync::Arc::new(RevocationService::new(crl, cert_store.clone()));
-
-        // Only start the CA and provisioner if the intermediate CA PEM is configured.
-        let provisioner = if !mtls_config.intermediate_ca_cert_pem.is_empty() {
-            match IntermediateCa::from_pem(&mtls_config) {
-                Ok(ca) => {
-                    let ca = std::sync::Arc::new(ca);
-                    let p = std::sync::Arc::new(CertificateProvisioner::new(
-                        ca,
-                        cert_store.clone(),
-                        revocation_svc.clone(),
-                        mtls_config.clone(),
-                    ));
-                    // Provision all registered services at startup
-                    for &svc in mtls::cert::REGISTERED_SERVICES {
-                        match p.provision_at_startup(svc) {
-                            Ok(cert) => info!(
-                                service = svc,
-                                serial = %cert.serial,
-                                expires_at = %cert.expires_at,
-                                "mTLS: startup certificate provisioned"
-                            ),
-                            Err(e) => tracing::warn!(service = svc, error = %e, "mTLS: startup provisioning failed"),
-                        }
-                    }
-                    // Start the lifecycle worker (14-day rotation sweep)
-                    let worker = CertLifecycleWorker::new(p.clone(), cert_store.clone(), mtls_config.clone());
-                    tokio::spawn(worker.run(worker_shutdown_rx.clone()));
-                    info!("✅ mTLS certificate lifecycle worker started");
-                    p
-                }
-                Err(e) => {
-                    tracing::warn!("mTLS: intermediate CA not loaded ({}); admin endpoints available but no auto-provisioning", e);
-                    std::sync::Arc::new(CertificateProvisioner::without_ca(
-                        cert_store.clone(),
-                        revocation_svc.clone(),
-                        mtls_config.clone(),
-                    ))
-                }
-            }
-        } else {
-            info!("mTLS: MTLS_INTERMEDIATE_CA_CERT_PEM not set — certificate auto-provisioning disabled");
-            std::sync::Arc::new(CertificateProvisioner::without_ca(
-                cert_store.clone(),
-                revocation_svc.clone(),
-                mtls_config.clone(),
-            ))
-        };
-
-        let mtls_state = std::sync::Arc::new(MtlsAdminState {
-            store: cert_store,
-            provisioner,
-            revocation: revocation_svc,
-        });
-
-        mtls_admin_routes()
-            .with_state(mtls_state)
-            .route_layer(axum::middleware::from_fn(security_headers_middleware))
-    };
-
     // ── DDoS protection state and admin routes ────────────────────────────────
     // ── Audit log query routes (Issue #183) ──────────────────────────────────
     let audit_routes = if let Some(ref pool) = db_pool {
@@ -1628,42 +1835,6 @@ fn validate_production_config() -> anyhow::Result<()> {
                 .route_layer(axum::middleware::from_fn(extract_identity)),
         )
     } else {
-        Router::new()
-    };
-
-    // ── External Auditor Portal ───────────────────────────────────────────────
-    let auditor_portal_routes = if let Some(ref pool) = db_pool {
-        let audit_repo = std::sync::Arc::new(audit::repository::AuditLogRepository::new(pool.clone()));
-        let auditor_repo = std::sync::Arc::new(auditor_portal::repository::AuditorRepository::new(pool.clone()));
-        let auditor_service = std::sync::Arc::new(auditor_portal::service::AuditorService::new(
-            auditor_repo,
-            audit_repo,
-        ));
-        let state = std::sync::Arc::new(auditor_portal::handlers::AuditorPortalState {
-            service: auditor_service,
-        });
-        info!("🔍 External auditor portal routes enabled");
-        auditor_portal::routes::auditor_routes(state.clone())
-            .merge(auditor_portal::routes::admin_auditor_routes(state))
-    } else {
-        info!("⏭️  Skipping auditor portal routes (no database)");
-        Router::new()
-    };
-
-    // ── Regulatory Examination Support & Evidence Package ─────────────────────
-    let regulatory_evidence_routes = if let (Some(ref pool), Some(ref writer)) = (db_pool.as_ref(), audit_writer.as_ref()) {
-        let reg_repo = std::sync::Arc::new(regulatory_evidence::RegulatoryEvidenceRepository::new(pool.clone()));
-        let reg_service = std::sync::Arc::new(regulatory_evidence::RegulatoryEvidenceService::new(
-            reg_repo,
-            writer.clone(),
-        ));
-        let reg_state = std::sync::Arc::new(regulatory_evidence::RegulatoryEvidenceState {
-            service: reg_service,
-        });
-        info!("📋 Regulatory evidence package routes enabled");
-        regulatory_evidence::regulatory_evidence_routes(reg_state)
-    } else {
-        info!("⏭️  Skipping regulatory evidence routes (no database)");
         Router::new()
     };
 
@@ -2050,36 +2221,6 @@ fn validate_production_config() -> anyhow::Result<()> {
         Router::new()
     };
 
-    // ── Bug Bounty Programme ──────────────────────────────────────────────────
-    let bug_bounty_routes = if let Some(pool) = db_pool.clone() {
-        let repo = std::sync::Arc::new(bug_bounty::BugBountyRepository::new(pool));
-        let config = bug_bounty::BugBountyConfig::default();
-        let registry = prometheus::default_registry();
-        let metrics = std::sync::Arc::new(
-            bug_bounty::metrics::BugBountyMetrics::new(registry).unwrap_or_else(|e| {
-                tracing::warn!("Bug bounty metrics registration failed ({}); using fallback", e);
-                bug_bounty::metrics::BugBountyMetrics::new(&prometheus::Registry::new())
-                    .expect("fallback registry must succeed")
-            }),
-        );
-        let notification_dispatcher = std::sync::Arc::new(
-            bug_bounty::notifications::NotificationDispatcher::new(repo.clone()),
-        );
-        let svc = std::sync::Arc::new(bug_bounty::BugBountyService::new(
-            repo,
-            notification_dispatcher,
-            config.clone(),
-            metrics,
-        ));
-        // Spawn SLA polling worker
-        bug_bounty::SlaPollingWorker::spawn(svc.clone(), &config);
-        info!("🐛 Bug bounty programme routes enabled");
-        bug_bounty::bug_bounty_routes(svc)
-    } else {
-        info!("⏭️  Skipping bug bounty routes (no database)");
-        Router::new()
-    };
-
     // Setup OAuth 2.0 routes
     let oauth_routes = if let (Some(pool), Some(cache)) = (db_pool.clone(), redis_cache.clone()) {
         match oauth::RsaKeyPair::from_env() {
@@ -2106,28 +2247,6 @@ fn validate_production_config() -> anyhow::Result<()> {
         }
     } else {
         info!("⏭️  Skipping OAuth routes (missing database or cache)");
-        Router::new()
-    };
-
-    // ── Dispute Resolution & Clawback Management (Issue #337) ────────────────
-    let dispute_routes = if let Some(pool) = db_pool.clone() {
-        let repo = std::sync::Arc::new(dispute::DisputeRepository::new(pool));
-        let svc = std::sync::Arc::new(dispute::DisputeService::new(repo.clone()));
-        // Spawn background worker to escalate overdue disputes every 5 minutes.
-        {
-            let svc_clone = svc.clone();
-            tokio::spawn(async move {
-                let mut ticker = tokio::time::interval(std::time::Duration::from_secs(300));
-                loop {
-                    ticker.tick().await;
-                    let _ = svc_clone.escalate_overdue_disputes().await;
-                }
-            });
-        }
-        info!("⚖️  Dispute resolution routes enabled");
-        dispute::dispute_routes().with_state(svc)
-    } else {
-        info!("⏭️  Skipping dispute routes (no database)");
         Router::new()
     };
 
@@ -2170,64 +2289,6 @@ fn validate_production_config() -> anyhow::Result<()> {
         (Router::new(), Router::new())
     };
 
-    // ── CBDC Interoperability & Sandbox Bridge (Issue #499) ─────────────────
-    let (cbdc_routes, cbdc_admin_route, cbdc_worker_handle) = if let (Some(pool), Some(redis)) =
-        (db_pool.clone(), redis_cache.clone())
-    {
-        use cbdc::*;
-
-        let repo = std::sync::Arc::new(CbdcRepository::new(pool.clone()));
-        let config = CbdcWorkerConfig::from_env();
-        let hsm_config = hsm::HsmClientConfig::default();
-        let hsm_client = std::sync::Arc::new(hsm::HsmClient::new(hsm_config));
-        let validator = std::sync::Arc::new(SwapValidator::new());
-        let gateway_pool = std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new()));
-
-        let two_pc = std::sync::Arc::new(TwoPhaseCommitManager::new(
-            repo.clone(),
-            redis.pool.clone(),
-            &config,
-        ));
-
-        let settlement_worker = std::sync::Arc::new(SettlementWorker::new(
-            repo.clone(),
-            two_pc.clone(),
-            validator.clone(),
-            gateway_pool.clone(),
-            config.clone(),
-        ));
-
-        let reversal_engine = std::sync::Arc::new(ReversalEngine::new(
-            repo.clone(),
-            config.clone(),
-        ));
-
-        // Spawn settlement worker
-        let settlement_shutdown_rx = worker_shutdown_rx.clone();
-        let settlement_handle = tokio::spawn(async move {
-            settlement_worker.run(settlement_shutdown_rx).await;
-        });
-
-        // Spawn reversal engine
-        let reversal_shutdown_rx = worker_shutdown_rx.clone();
-        let reversal_handle = tokio::spawn(async move {
-            reversal_engine.run(reversal_shutdown_rx).await;
-        });
-
-        info!("✅ CBDC Interoperability workers started (settlement + reversal)");
-
-        let handler_state = std::sync::Arc::new(CbdcHandlerState::new(repo));
-
-        (
-            cbdc_api_routes(handler_state.clone()),
-            cbdc_admin_routes(handler_state),
-            Some((settlement_handle, reversal_handle)),
-        )
-    } else {
-        info!("⏭️  Skipping CBDC routes (missing database or redis)");
-        (Router::new(), Router::new(), None)
-    };
-
     // ── Multi-Sig Governance routes (Issue: Multi-Sig Governance) ────────────
     let governance_routes = if let Some(pool) = db_pool.clone() {
         let horizon_url = std::env::var("STELLAR_HORIZON_URL")
@@ -2266,223 +2327,6 @@ fn validate_production_config() -> anyhow::Result<()> {
         Router::new()
     };
 
-    // ── Peg Integrity Monitor ─────────────────────────────────────────────────
-    let peg_monitor_routes = if let (Some(pool), Some(client)) =
-        (db_pool.clone(), stellar_client.clone())
-    {
-        let peg_repo = std::sync::Arc::new(peg_monitor::PegMonitorRepository::new(pool));
-        let asset_code = std::env::var("CNGN_ASSET_CODE").unwrap_or_else(|_| "cNGN".to_string());
-        let asset_issuer = std::env::var("CNGN_ISSUER_ADDRESS")
-            .or_else(|_| std::env::var("CNGN_ISSUER_MAINNET"))
-            .unwrap_or_default();
-
-        let peg_enabled = std::env::var("PEG_MONITOR_ENABLED")
-            .unwrap_or_else(|_| "true".to_string())
-            .to_lowercase()
-            != "false";
-
-        if peg_enabled && !asset_issuer.is_empty() {
-            let worker = peg_monitor::PegMonitorWorker::new(
-                peg_repo.clone(),
-                client,
-                asset_code,
-                asset_issuer,
-            );
-            tokio::spawn(worker.run(worker_shutdown_rx.clone()));
-            info!("✅ Peg Integrity Monitor worker started");
-        } else {
-            info!("⏭️  Peg monitor worker skipped (disabled or missing CNGN_ISSUER_ADDRESS)");
-        }
-
-        peg_monitor::peg_monitor_routes(peg_repo)
-    } else {
-        info!("⏭️  Skipping peg monitor routes (missing database or stellar client)");
-        Router::new()
-    };
-
-    // ── POS QR Payment System ─────────────────────────────────────────────────
-    let pos_routes = if let (Some(pool), Some(client)) = (db_pool.clone(), stellar_client.clone()) {
-        let cngn_issuer = std::env::var("CNGN_ISSUER_ADDRESS")
-            .or_else(|_| std::env::var("CNGN_ISSUER_MAINNET"))
-            .unwrap_or_else(|_| "GXXXXDEFAULTISSUERXXXX".to_string());
-
-        let qr_generator = std::sync::Arc::new(pos::QrGenerator::new(cngn_issuer));
-        let payment_intent_service = std::sync::Arc::new(pos::payment_intent::PaymentIntentService::new(
-            pool.clone(),
-            qr_generator.clone(),
-        ));
-
-        let lobby_service = std::sync::Arc::new(pos::lobby_service::LobbyService::new(
-            pool.clone(),
-            std::sync::Arc::new(client),
-            5, // Poll interval in seconds
-        ));
-
-        // Start lobby service polling worker
-        let lobby_clone = lobby_service.clone();
-        tokio::spawn(async move {
-            lobby_clone.start_polling_worker().await;
-        });
-
-        let legacy_bridge = std::sync::Arc::new(pos::legacy_bridge::LegacyBridge::new(
-            payment_intent_service.clone(),
-        ));
-
-        let verification_secret = std::env::var("POS_VERIFICATION_SECRET")
-            .unwrap_or_else(|_| "default-secret-change-in-production".to_string());
-        let proof_of_payment = std::sync::Arc::new(pos::proof_of_payment::ProofOfPayment::new(
-            pool.clone(),
-            verification_secret,
-        ));
-
-        let pos_state = pos::handlers::PosState {
-            payment_intent_service,
-            lobby_service,
-            legacy_bridge,
-            proof_of_payment,
-        };
-
-        info!("💳 POS QR payment system routes enabled");
-        pos::routes::pos_routes(pos_state)
-    } else {
-        info!("⏭️  Skipping POS routes (missing database or stellar client)");
-        Router::new()
-    };
-    // ── Agent CFO — In-House Treasury for Autonomous Agents ─────────────────
-    let agent_cfo_routes = if let Some(pool) = db_pool.clone() {
-        let engine = std::sync::Arc::new(agent_cfo::engine::AgentCfoEngine::new(pool.clone()));
-        let ledger = engine.ledger();
-        let cfo_state = agent_cfo::handlers::CfoState {
-            engine,
-            ledger,
-            db: pool.clone(),
-        };
-        // Start burn-rate watchdog
-        let watchdog = agent_cfo::watchdog::BurnRateWatchdog::new(
-            pool,
-            agent_cfo::watchdog::WatchdogConfig::from_env(),
-        );
-        tokio::spawn(watchdog.run(worker_shutdown_rx.clone()));
-        info!("✅ Agent CFO watchdog started");
-        agent_cfo::routes::agent_cfo_routes(cfo_state)
-    } else {
-        info!("⏭️  Skipping Agent CFO routes (no database)");
-        Router::new()
-    };
-
-    // ── Agent Swarm Intelligence ──────────────────────────────────────────────
-    let agent_swarm_routes = if let Some(pool) = db_pool.clone() {
-        use agent_swarm::{
-            consensus::ConsensusEngine,
-            delegation::DelegationEngine,
-            discovery::PeerDiscovery,
-            gossip::GossipStore,
-            handlers::SwarmState,
-            settlement::SettlementEngine,
-        };
-        let swarm_state = SwarmState {
-            discovery: std::sync::Arc::new(PeerDiscovery::new(pool.clone())),
-            delegation: std::sync::Arc::new(DelegationEngine::new(pool.clone())),
-            consensus: std::sync::Arc::new(ConsensusEngine::new(pool.clone())),
-            gossip: std::sync::Arc::new(GossipStore::new(pool.clone())),
-            settlement: std::sync::Arc::new(SettlementEngine::new(pool.clone())),
-            db: pool.clone(),
-        };
-        tokio::spawn(PeerDiscovery::run_heartbeat_sweep(pool.clone(), worker_shutdown_rx.clone()));
-        tokio::spawn(GossipStore::run_eviction_worker(pool, worker_shutdown_rx.clone()));
-        info!("✅ Agent Swarm Intelligence routes enabled");
-        agent_swarm::routes::agent_swarm_routes(swarm_state)
-    } else {
-        info!("⏭️  Skipping Agent Swarm routes (no database)");
-        Router::new()
-    };
-
-    // ── Agent Admin Dashboard — HITL control system ───────────────────────
-    let agent_dashboard_routes = if let Some(pool) = db_pool.clone() {
-        let svc = std::sync::Arc::new(agent_dashboard::service::AgentDashboardService::new(pool));
-        info!("✅ Agent Admin Dashboard routes enabled");
-        agent_dashboard::routes::agent_dashboard_routes(svc)
-    } else {
-        info!("⏭️  Skipping Agent Dashboard routes (no database)");
-        Router::new()
-    };
-
-    // ── Performance SLA Management & Breach Response (Issue #405) ────────────
-    let sla_routes = if let Some(pool) = db_pool.clone() {
-        let http = reqwest::Client::new();
-        let sla_state = std::sync::Arc::new(sla::SlaState {
-            repo: std::sync::Arc::new(sla::SlaRepository::new(pool.clone())),
-            pool: pool.clone(),
-        });
-
-        // SLA monitor worker — evaluates SLOs every 60 seconds
-        let monitor = sla::SlaMonitorWorker::new(pool.clone(), http);
-        tokio::spawn(monitor.run(worker_shutdown_rx.clone()));
-        info!("✅ SLA monitor worker started (60s interval)");
-
-        // Monthly compliance report worker
-        let report_worker = sla::SlaReportWorker::new(pool);
-        tokio::spawn(report_worker.run(worker_shutdown_rx.clone()));
-        info!("✅ SLA report worker started");
-
-        sla::sla_routes(sla_state)
-    } else {
-        info!("⏭️  Skipping SLA routes (no database)");
-        Router::new()
-    };
-
-    // PEP Screening & Monitoring Engine — Issue #348
-    let pep_routes = if let (Some(pool), Some(cache)) = (db_pool.clone(), redis_cache.clone()) {
-        let repo = std::sync::Arc::new(pep::PepRepository::new(pool));
-        let config = pep::PepScreeningConfig {
-            provider_api_key: std::env::var("PEP_PROVIDER_API_KEY").unwrap_or_default(),
-            provider_base_url: std::env::var("PEP_PROVIDER_BASE_URL")
-                .unwrap_or_else(|_| "https://api.dowjones.com/risk-and-compliance/v1".into()),
-            ..Default::default()
-        };
-        let screening = std::sync::Arc::new(pep::PepScreeningService::new(
-            config,
-            cache,
-            repo.clone(),
-        ));
-        let monitoring = std::sync::Arc::new(pep::PepMonitoringService::new(
-            screening.clone(),
-            repo.clone(),
-        ));
-
-        // Spawn nightly re-screening worker
-        let worker = std::sync::Arc::new(pep::PepRescreeningWorker::new(monitoring));
-        pep::PepRescreeningWorker::spawn(worker);
-        info!("✅ PEP nightly re-screening worker started (24h interval)");
-
-        pep::handlers::pep_routes(pep::handlers::PepState { screening, repo })
-    } else {
-        info!("⏭️  Skipping PEP routes (no database or cache)");
-        Router::new()
-    };
-
-    // DeFi Analytics & Yield Performance Dashboard — Issue #348
-    let defi_analytics_routes = if let Some(pool) = db_pool.clone() {
-        let repo = std::sync::Arc::new(
-            defi::analytics::DefiAnalyticsRepository::new(std::sync::Arc::new(pool.clone()))
-        );
-        let svc = std::sync::Arc::new(defi::analytics::DefiAnalyticsService::new(repo));
-
-        // Spawn background snapshot worker
-        let worker_svc = svc.clone();
-        let worker_config = defi::analytics::worker::DefiAnalyticsWorkerConfig::default();
-        tokio::spawn(
-            defi::analytics::worker::DefiAnalyticsWorker::new(worker_svc, worker_config)
-                .run(worker_shutdown_rx.clone())
-        );
-        info!("✅ DeFi analytics snapshot worker started");
-
-        defi::analytics::defi_analytics_routes(svc)
-    } else {
-        info!("⏭️  Skipping DeFi analytics routes (no database)");
-        Router::new()
-    };
-
     let app = Router::new()
         .route("/", get(root))
         .route("/health", get(health))
@@ -2503,20 +2347,14 @@ fn validate_production_config() -> anyhow::Result<()> {
             get(list_trustline_operations_by_wallet),
         )
         .route("/api/fees/calculate", post(calculate_fee))
-        .route("/api/cngn/trustlines/check", post(check_cngn_trustline))
-        .route(
-            "/api/cngn/trustlines/preflight",
-            post(preflight_cngn_trustline),
-        )
-        .route("/api/cngn/trustlines/build", post(build_cngn_trustline))
-        .route("/api/cngn/trustlines/submit", post(submit_cngn_trustline))
-        .route(
-            "/api/cngn/trustlines/retry/{id}",
-            post(retry_cngn_trustline),
-        )
-        .route("/api/cngn/payments/build", post(build_cngn_payment))
-        .route("/api/cngn/payments/sign", post(sign_cngn_payment))
-        .route("/api/cngn/payments/submit", post(submit_cngn_payment))
+        // NOTE: cNGN trustline build/submit/retry and cNGN payment build/sign/submit
+        // routes are intentionally omitted — their handlers depend on
+        // chains::stellar::trustline / chains::stellar::payment, a transaction-building
+        // subsystem that doesn't exist anywhere in this codebase (only a thin
+        // compatibility shim for the client/config/error types was reconstructed;
+        // see src/chains/). Reconstructing real XDR transaction-building logic for a
+        // payments system without a spec or compiler was judged too risky to guess at.
+        // check_cngn_trustline and preflight_cngn_trustline are omitted for the same reason.
         .route("/api/payments/initiate", post(initiate_payment))
         .merge(onramp_routes)
         .merge(offramp_routes)
@@ -2532,9 +2370,7 @@ fn validate_production_config() -> anyhow::Result<()> {
         .merge(admin_routes)
         .merge(adaptive_rl_admin_routes)
         .merge(audit_routes)
-        .merge(auditor_portal_routes)
         .merge(sar_routes)
-        .merge(regulatory_evidence_routes)
         .merge(compliance_effectiveness_routes)
         .merge(stellar_throughput_routes)
         .merge(kyb_routes)
@@ -2545,38 +2381,23 @@ fn validate_production_config() -> anyhow::Result<()> {
         .merge(recurring_routes)
         .merge(developer_routes)
         .merge(oauth_routes)
-        .merge(peg_monitor_routes)
         .merge(ddos_admin_routes)
         .merge(pentest_routes)
         .merge(liquidity_routes)
         .merge(transparency_routes)
         .merge(por_routes)
-        .merge(bug_bounty_routes)
         .merge(developer_portal::routes::register_developer_portal_routes(
             Router::new(),
             db_pool.clone(),
         ))
-        .merge(Router::new().nest("/api/admin/security", mtls_admin_routes))
-        .merge(security_compliance_routes)
         .merge(lp_payout_routes)
-        .merge(merchant_multisig_routes)
         .merge(oracle_routes)
         .merge(governance_routes)
         .merge(lp_onboarding_routes)
         .merge(partner_hub_routes)
         .merge(partner_routes)
-        .merge(agent_cfo_routes)
-        .merge(agent_swarm_routes)
-        .merge(agent_dashboard_routes)
-        .merge(pos_routes)
-        .merge(dispute_routes)
         .merge(banking_routes)
         .merge(banking_webhook_routes)
-        .merge(cbdc_routes)
-        .merge(cbdc_admin_route)
-        .merge(sla_routes)
-        .merge(pep_routes)
-        .merge(defi_analytics_routes)
         .with_state(AppState {
             db_pool,
             redis_cache,
@@ -2879,22 +2700,630 @@ fn validate_production_config() -> anyhow::Result<()> {
         }
     }
 
-    if let Some((settlement_handle, reversal_handle)) = cbdc_worker_handle {
-        if let Err(e) = tokio::time::timeout(std::time::Duration::from_secs(5), settlement_handle).await {
-            error!(error = %e, "Timed out waiting for CBDC settlement worker shutdown");
-        }
-        if let Err(e) = tokio::time::timeout(std::time::Duration::from_secs(5), reversal_handle).await {
-            error!(error = %e, "Timed out waiting for CBDC reversal engine shutdown");
-        }
-    }
-
     info!("👋 Server shutdown complete");
     // Flush all buffered spans to the OTLP exporter before the process exits.
     // Must be the very last call so no spans are lost during shutdown.   (Issue #104)
     // -------------------------------------------------------------------------
     shutdown_tracer();
 
-    
-    info!("✅ Production configuration validated");
     Ok(())
+}
+
+// Application state
+#[derive(Clone)]
+struct AppState {
+    db_pool: Option<sqlx::PgPool>,
+    redis_cache: Option<RedisCache>,
+    stellar_client: Option<StellarClient>,
+    health_checker: HealthChecker,
+    warming_state: Option<WarmingState>,
+    ha_pool: Option<std::sync::Arc<database::ha_pool::HaPoolManager>>,
+}
+
+// Handlers
+async fn root() -> &'static str {
+    info!("📍 Root endpoint accessed");
+    "Welcome to Aframp Backend API"
+}
+
+async fn health(
+    axum::extract::State(state): axum::extract::State<AppState>,
+) -> Result<Json<HealthStatus>, (axum::http::StatusCode, String)> {
+    info!("🏥 Health check requested");
+    let health_status = state.health_checker.check_health().await;
+
+    // Return 503 if any component is unhealthy
+    if matches!(health_status.status, crate::health::HealthState::Unhealthy) {
+        error!("❌ Health check failed - service unhealthy");
+        Err((
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "Service Unavailable".to_string(),
+        ))
+    } else {
+        info!("✅ Health check passed");
+        Ok(Json(health_status))
+    }
+}
+
+/// Readiness probe - checks if the service is ready to accept traffic
+async fn readiness(
+    axum::extract::State(state): axum::extract::State<AppState>,
+) -> Result<Json<HealthStatus>, (axum::http::StatusCode, String)> {
+    info!("🔍 Readiness probe requested");
+    let result = health(axum::extract::State(state)).await;
+    if result.is_ok() {
+        info!("✅ Readiness check passed");
+    } else {
+        error!("❌ Readiness check failed");
+    }
+    result
+}
+
+/// Liveness probe - checks if the service is alive (basic check)
+async fn liveness() -> Result<&'static str, (axum::http::StatusCode, String)> {
+    info!("💓 Liveness probe requested");
+    info!("✅ Liveness check passed");
+    Ok("OK")
+}
+
+async fn get_stellar_account(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    axum::extract::Path(address): axum::extract::Path<String>,
+) -> Result<String, (axum::http::StatusCode, String)> {
+    info!(address = %address, "🔍 Stellar account lookup requested");
+
+    let stellar_client = match state.stellar_client.as_ref() {
+        Some(client) => client,
+        None => {
+            return Err((
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "Stellar client disabled by configuration".to_string(),
+            ))
+        }
+    };
+
+    match stellar_client.account_exists(&address).await {
+        Ok(exists) => {
+            if exists {
+                info!(address = %address, "✅ Account exists, fetching details");
+                match stellar_client.get_account(&address).await {
+                    Ok(account) => {
+                        info!(
+                            address = %address,
+                            balances = account.balances.len(),
+                            "✅ Account details fetched successfully"
+                        );
+                        Ok(format!(
+                            "Account: {}, Balances: {}",
+                            account.account_id,
+                            account.balances.len()
+                        ))
+                    }
+                    Err(e) => {
+                        error!(address = %address, error = %e, "❌ Failed to fetch account details");
+                        Err((
+                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("Failed to fetch account: {}", e),
+                        ))
+                    }
+                }
+            } else {
+                info!(address = %address, "ℹ️  Account not found");
+                Err((
+                    axum::http::StatusCode::NOT_FOUND,
+                    "Account not found".to_string(),
+                ))
+            }
+        }
+        Err(e) => {
+            error!(address = %address, error = %e, "❌ Error checking account existence");
+            Err((
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Error checking account: {}", e),
+            ))
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct TrustlineOperationRequest {
+    wallet_address: String,
+    asset_code: String,
+    issuer: Option<String>,
+    operation_type: TrustlineOperationType,
+    status: TrustlineOperationStatus,
+    transaction_hash: Option<String>,
+    error_message: Option<String>,
+    metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TrustlineOperationStatusUpdate {
+    status: TrustlineOperationStatus,
+    transaction_hash: Option<String>,
+    error_message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TrustlineOperationQuery {
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TrustlineOperationType {
+    Create,
+    Update,
+    Remove,
+}
+
+impl TrustlineOperationType {
+    fn as_str(&self) -> &'static str {
+        match self {
+            TrustlineOperationType::Create => "create",
+            TrustlineOperationType::Update => "update",
+            TrustlineOperationType::Remove => "remove",
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TrustlineOperationStatus {
+    Pending,
+    Completed,
+    Failed,
+}
+
+impl TrustlineOperationStatus {
+    fn as_str(&self) -> &'static str {
+        match self {
+            TrustlineOperationStatus::Pending => "pending",
+            TrustlineOperationStatus::Completed => "completed",
+            TrustlineOperationStatus::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct FeeCalculationRequest {
+    fee_type: FeeType,
+    amount: String,
+    currency: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum FeeType {
+    Onramp,
+    Offramp,
+    BillPayment,
+    Exchange,
+    Transfer,
+}
+
+impl FeeType {
+    fn as_str(&self) -> &'static str {
+        match self {
+            FeeType::Onramp => "onramp",
+            FeeType::Offramp => "offramp",
+            FeeType::BillPayment => "bill_payment",
+            FeeType::Exchange => "exchange",
+            FeeType::Transfer => "transfer",
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct FeeCalculationResponse {
+    fee: String,
+    rate_bps: i32,
+    flat_fee: String,
+    min_fee: Option<String>,
+    max_fee: Option<String>,
+    currency: Option<String>,
+    structure_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct InitiatePaymentApiRequest {
+    amount: String,
+    currency: Option<String>,
+    email: Option<String>,
+    phone: Option<String>,
+    payment_method: Option<String>,
+    callback_url: Option<String>,
+    transaction_reference: String,
+    metadata: Option<serde_json::Value>,
+    provider: Option<String>,
+}
+
+async fn create_trustline_operation(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<TrustlineOperationRequest>,
+) -> Result<
+    Json<crate::database::trustline_operation_repository::TrustlineOperation>,
+    (
+        axum::http::StatusCode,
+        Json<crate::middleware::error::ErrorResponse>,
+    ),
+> {
+    let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
+    let pool = match state.db_pool.as_ref() {
+        Some(pool) => pool,
+        None => {
+            return Err(crate::middleware::error::json_error_response(
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "Database disabled by configuration",
+                request_id,
+            ))
+        }
+    };
+
+    if payload.wallet_address.trim().is_empty() {
+        return Err(crate::middleware::error::json_error_response(
+            axum::http::StatusCode::BAD_REQUEST,
+            "wallet_address is required",
+            request_id,
+        ));
+    }
+    if payload.asset_code.trim().is_empty() {
+        return Err(crate::middleware::error::json_error_response(
+            axum::http::StatusCode::BAD_REQUEST,
+            "asset_code is required",
+            request_id,
+        ));
+    }
+
+    let repo = crate::database::trustline_operation_repository::TrustlineOperationRepository::new(
+        pool.clone(),
+    );
+    let service = crate::services::trustline_operation::TrustlineOperationService::new(repo);
+
+    let input = crate::services::trustline_operation::TrustlineOperationInput {
+        wallet_address: payload.wallet_address,
+        asset_code: payload.asset_code,
+        issuer: payload.issuer,
+        operation_type: payload.operation_type.as_str().to_string(),
+        status: payload.status.as_str().to_string(),
+        transaction_hash: payload.transaction_hash,
+        error_message: payload.error_message,
+        metadata: payload.metadata.unwrap_or_else(|| serde_json::json!({})),
+    };
+
+    let result = match payload.operation_type {
+        TrustlineOperationType::Create => service.record_create(input).await,
+        TrustlineOperationType::Update => service.record_update(input).await,
+        TrustlineOperationType::Remove => service.record_remove(input).await,
+    };
+
+    result.map(Json).map_err(|e| {
+        crate::middleware::error::json_error_response(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            e.to_string(),
+            request_id,
+        )
+    })
+}
+
+async fn initiate_payment(
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<InitiatePaymentApiRequest>,
+) -> Result<
+    Json<crate::payments::types::PaymentResponse>,
+    (
+        axum::http::StatusCode,
+        Json<crate::middleware::error::ErrorResponse>,
+    ),
+> {
+    let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
+
+    if payload.transaction_reference.trim().is_empty() {
+        return Err(crate::middleware::error::json_error_response(
+            axum::http::StatusCode::BAD_REQUEST,
+            "transaction_reference is required",
+            request_id,
+        ));
+    }
+    if payload.email.as_deref().unwrap_or("").trim().is_empty() {
+        return Err(crate::middleware::error::json_error_response(
+            axum::http::StatusCode::BAD_REQUEST,
+            "email is required for payment initialization",
+            request_id,
+        ));
+    }
+
+    let payment_method = match payload
+        .payment_method
+        .as_deref()
+        .unwrap_or("card")
+        .trim()
+        .to_lowercase()
+        .as_str()
+    {
+        "card" => PaymentMethod::Card,
+        "bank_transfer" | "bank" => PaymentMethod::BankTransfer,
+        "mobile_money" => PaymentMethod::MobileMoney,
+        "ussd" => PaymentMethod::Ussd,
+        "wallet" => PaymentMethod::Wallet,
+        _ => PaymentMethod::Other,
+    };
+
+    let provider_request = ProviderPaymentRequest {
+        amount: Money {
+            amount: payload.amount,
+            currency: payload.currency.unwrap_or_else(|| "NGN".to_string()),
+        },
+        customer: CustomerContact {
+            email: payload.email,
+            phone: payload.phone,
+        },
+        payment_method,
+        callback_url: payload.callback_url,
+        transaction_reference: payload.transaction_reference,
+        metadata: payload.metadata,
+    };
+
+    let factory = PaymentProviderFactory::from_env().map_err(|e| {
+        crate::middleware::error::json_error_response(
+            axum::http::StatusCode::from_u16(e.http_status_code())
+                .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR),
+            e.user_message(),
+            request_id.clone(),
+        )
+    })?;
+
+    let provider = match payload.provider {
+        Some(provider_name) => {
+            let provider = ProviderName::from_str(&provider_name).map_err(|e| {
+                crate::middleware::error::json_error_response(
+                    axum::http::StatusCode::from_u16(e.http_status_code())
+                        .unwrap_or(axum::http::StatusCode::BAD_REQUEST),
+                    e.user_message(),
+                    request_id.clone(),
+                )
+            })?;
+            factory.get_provider(provider)
+        }
+        None => factory.get_default_provider(),
+    }
+    .map_err(|e| {
+        crate::middleware::error::json_error_response(
+            axum::http::StatusCode::from_u16(e.http_status_code())
+                .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR),
+            e.user_message(),
+            request_id.clone(),
+        )
+    })?;
+
+    let response = provider
+        .initiate_payment(provider_request)
+        .await
+        .map_err(|e| {
+            crate::middleware::error::json_error_response(
+                axum::http::StatusCode::from_u16(e.http_status_code())
+                    .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR),
+                e.user_message(),
+                request_id.clone(),
+            )
+        })?;
+
+    Ok(Json(response))
+}
+
+async fn update_trustline_operation_status(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<TrustlineOperationStatusUpdate>,
+) -> Result<
+    Json<crate::database::trustline_operation_repository::TrustlineOperation>,
+    (
+        axum::http::StatusCode,
+        Json<crate::middleware::error::ErrorResponse>,
+    ),
+> {
+    let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
+    let pool = match state.db_pool.as_ref() {
+        Some(pool) => pool,
+        None => {
+            return Err(crate::middleware::error::json_error_response(
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "Database disabled by configuration",
+                request_id,
+            ))
+        }
+    };
+
+    let uuid = Uuid::parse_str(&id).map_err(|e| {
+        crate::middleware::error::json_error_response(
+            axum::http::StatusCode::BAD_REQUEST,
+            format!("Invalid UUID: {}", e),
+            request_id.clone(),
+        )
+    })?;
+
+    let repo = crate::database::trustline_operation_repository::TrustlineOperationRepository::new(
+        pool.clone(),
+    );
+    let service = crate::services::trustline_operation::TrustlineOperationService::new(repo);
+
+    service
+        .update_status(
+            uuid,
+            payload.status.as_str(),
+            payload.transaction_hash.as_deref(),
+            payload.error_message.as_deref(),
+        )
+        .await
+        .map(Json)
+        .map_err(|e| {
+            crate::middleware::error::json_error_response(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                e.to_string(),
+                request_id.clone(),
+            )
+        })
+}
+
+async fn list_trustline_operations_by_wallet(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    axum::extract::Path(address): axum::extract::Path<String>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<TrustlineOperationQuery>,
+) -> Result<
+    Json<Vec<crate::database::trustline_operation_repository::TrustlineOperation>>,
+    (
+        axum::http::StatusCode,
+        Json<crate::middleware::error::ErrorResponse>,
+    ),
+> {
+    let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
+    let pool = match state.db_pool.as_ref() {
+        Some(pool) => pool,
+        None => {
+            return Err(crate::middleware::error::json_error_response(
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "Database disabled by configuration",
+                request_id,
+            ))
+        }
+    };
+
+    if address.trim().is_empty() {
+        return Err(crate::middleware::error::json_error_response(
+            axum::http::StatusCode::BAD_REQUEST,
+            "wallet address is required",
+            request_id,
+        ));
+    }
+
+    let repo = crate::database::trustline_operation_repository::TrustlineOperationRepository::new(
+        pool.clone(),
+    );
+
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    repo.find_by_wallet(&address, limit)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            crate::middleware::error::json_error_response(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                e.to_string(),
+                request_id,
+            )
+        })
+}
+
+async fn calculate_fee(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<FeeCalculationRequest>,
+) -> Result<
+    Json<FeeCalculationResponse>,
+    (
+        axum::http::StatusCode,
+        Json<crate::middleware::error::ErrorResponse>,
+    ),
+> {
+    let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
+    let pool = match state.db_pool.as_ref() {
+        Some(pool) => pool,
+        None => {
+            return Err(crate::middleware::error::json_error_response(
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "Database disabled by configuration",
+                request_id,
+            ))
+        }
+    };
+
+    let repo = crate::database::fee_structure_repository::FeeStructureRepository::new(pool.clone());
+    let service = crate::services::fee_structure::FeeStructureService::new(repo);
+
+    let amount = crate::services::fee_structure::parse_amount(&payload.amount);
+    if amount <= bigdecimal::BigDecimal::from(0) {
+        return Err(crate::middleware::error::json_error_response(
+            axum::http::StatusCode::BAD_REQUEST,
+            "amount must be greater than 0",
+            request_id,
+        ));
+    }
+
+    let result = service
+        .calculate_fee(crate::services::fee_structure::FeeCalculationInput {
+            fee_type: payload.fee_type.as_str().to_string(),
+            amount,
+            currency: payload.currency,
+            at_time: None,
+        })
+        .await
+        .map_err(|e| {
+            crate::middleware::error::json_error_response(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                e.to_string(),
+                request_id.clone(),
+            )
+        })?;
+
+    match result {
+        Some(calc) => Ok(Json(FeeCalculationResponse {
+            fee: calc.fee.to_string(),
+            rate_bps: calc.rate_bps,
+            flat_fee: calc.flat_fee.to_string(),
+            min_fee: calc.min_fee.map(|v| v.to_string()),
+            max_fee: calc.max_fee.map(|v| v.to_string()),
+            currency: calc.currency,
+            structure_id: calc.structure_id.to_string(),
+        })),
+        None => Err(crate::middleware::error::json_error_response(
+            axum::http::StatusCode::NOT_FOUND,
+            "No active fee structure found",
+            request_id.clone(),
+        )),
+    }
+}
+
+fn app_error_response(
+    err: crate::error::AppError,
+    request_id: Option<String>,
+) -> (
+    axum::http::StatusCode,
+    Json<crate::middleware::error::ErrorResponse>,
+) {
+    let err = match request_id {
+        Some(req_id) => err.with_request_id(req_id),
+        None => err,
+    };
+    let status = axum::http::StatusCode::from_u16(err.status_code())
+        .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+    (
+        status,
+        Json(crate::middleware::error::ErrorResponse::from_app_error(
+            &err,
+        )),
+    )
+}
+
+async fn create_onramp_quote(
+    axum::extract::State(quote_service): axum::extract::State<
+        std::sync::Arc<services::onramp_quote::OnrampQuoteService>,
+    >,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<services::onramp_quote::OnrampQuoteRequest>,
+) -> Result<
+    Json<services::onramp_quote::OnrampQuoteResponse>,
+    (
+        axum::http::StatusCode,
+        Json<middleware::error::ErrorResponse>,
+    ),
+> {
+    let request_id = middleware::error::get_request_id_from_headers(&headers);
+
+    quote_service
+        .create_quote(payload)
+        .await
+        .map(Json)
+        .map_err(|e| app_error_response(e, request_id))
 }

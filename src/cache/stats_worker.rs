@@ -12,6 +12,7 @@ use tracing::{info, warn};
 
 const POLL_INTERVAL_SECS: u64 = 60;
 const MEMORY_ALERT_PCT: f64 = 90.0;
+const PENDING_ALERT_THRESHOLD: i64 = 10;
 
 pub struct CacheStatsWorker {
     cache: Arc<MultiLevelCache>,
@@ -39,6 +40,34 @@ impl CacheStatsWorker {
 
         // Fetch and check Redis memory
         self.check_redis_memory().await;
+
+        // Update bb8 pool gauges and check for exhaustion
+        self.check_pool_stats();
+    }
+
+    fn check_pool_stats(&self) {
+        let state = self.redis.pool.state();
+        let pending = self.redis.pending_acquisitions();
+
+        crate::metrics::cache::redis_pool_size()
+            .with_label_values(&["primary"])
+            .set(state.connections as f64);
+        crate::metrics::cache::redis_pool_idle()
+            .with_label_values(&["primary"])
+            .set(state.idle_connections as f64);
+        crate::metrics::cache::redis_pool_pending()
+            .with_label_values(&["primary"])
+            .set(pending as f64);
+
+        if pending > PENDING_ALERT_THRESHOLD {
+            warn!(
+                pending,
+                threshold = PENDING_ALERT_THRESHOLD,
+                pool_size = state.connections,
+                idle = state.idle_connections,
+                "ALERT: Redis pool has {} connections pending — pool may be exhausted", pending
+            );
+        }
     }
 
     async fn check_redis_memory(&self) {
