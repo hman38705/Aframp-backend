@@ -17,6 +17,8 @@ pub mod traits;
 pub mod types;
 #[cfg(feature = "database")]
 pub mod utils;
+#[cfg(feature = "database")]
+pub mod circuit_breaker;
 
 #[cfg(feature = "database")]
 pub use error::{PaymentError, PaymentResult};
