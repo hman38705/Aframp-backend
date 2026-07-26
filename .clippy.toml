@@ -9,3 +9,9 @@ arithmetic-side-effects-allowed-unary = []
 # Maximum allowed complexity — keeps security-critical code reviewable.
 cognitive-complexity-threshold = 25
 too-many-arguments-threshold = 8
+
+# Issue #791: Disallow panic-prone calls in production code paths.
+# Replace unwrap()/expect() with proper error propagation using `?` or match.
+# Allow in tests and startup validation (annotate with #[allow(clippy::unwrap_used)]
+# plus a comment explaining why the panic is acceptable there).
+disallowed-macros = []

@@ -1,5 +1,59 @@
 groups:
   # ===========================================================================
+  # Log Rotation Monitoring Alerts (Issue #789)
+  # ===========================================================================
+  - name: aframp.log_rotation
+    interval: 60s
+    rules:
+      # Missed log rotation — success timestamp older than 25 hours
+      - alert: LogRotationMissed
+        expr: |
+          (time() - aframp_log_rotation_last_success_timestamp) > 90000
+        for: 5m
+        labels:
+          severity: critical
+          team: oncall
+        annotations:
+          summary: "Log rotation has not succeeded in over 25 hours"
+          description: >
+            The last successful log rotation was {{ $value | humanizeDuration }} ago.
+            Rotation failures can cause unbounded log growth and disk exhaustion.
+            Check cron schedule and review log-rotation.sh output for errors.
+          runbook: "https://runbooks.aframp.io/log-rotation-missed"
+
+      # Log partition disk usage warning at 80 %
+      - alert: LogDiskUsageHigh
+        expr: |
+          aframp_log_dir_disk_usage_percent > 80
+        for: 5m
+        labels:
+          severity: warning
+          team: engineering
+        annotations:
+          summary: "Log partition disk usage high ({{ $value }}%)"
+          description: >
+            Disk usage on the log partition has exceeded 80%.
+            Current usage: {{ $value }}%.
+            Investigate log growth and ensure rotation is running successfully.
+          runbook: "https://runbooks.aframp.io/log-disk-usage-high"
+
+      # Log partition disk usage critical at 90 %
+      - alert: LogDiskUsageCritical
+        expr: |
+          aframp_log_dir_disk_usage_percent > 90
+        for: 2m
+        labels:
+          severity: critical
+          team: oncall
+        annotations:
+          summary: "Log partition disk usage critical ({{ $value }}%)"
+          description: >
+            Disk usage on the log partition has exceeded 90%.
+            Current usage: {{ $value }}%.
+            Immediate action required to prevent disk exhaustion.
+          runbook: "https://runbooks.aframp.io/log-disk-usage-critical"
+
+  # ===========================================================================
   # HTTP / Application Error Alerts
   # ===========================================================================
   - name: aframp.http
