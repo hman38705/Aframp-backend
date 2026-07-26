@@ -1092,6 +1092,53 @@ fn register_all(r: &Registry) {
     crate::security_compliance::metrics::register(r);
     crate::liquidity::metrics::register(r);
     crate::travel_rule::metrics::register(r);
+    spawn::register(r);
+}
+
+// ---------------------------------------------------------------------------
+// Spawned-task error counter — issue #793
+// ---------------------------------------------------------------------------
+
+/// Metrics for tracking unhandled errors from fire-and-forget `tokio::spawn` tasks.
+///
+/// Provides `aframp_spawn_error_total{task_name}` — a counter that is incremented
+/// whenever a spawned task panics or returns a `JoinError`. Use the helper
+/// [`spawn::inc_error`] instead of calling Prometheus directly.
+pub mod spawn {
+    use super::*;
+
+    static SPAWN_ERROR_TOTAL: OnceLock<CounterVec> = OnceLock::new();
+
+    pub fn register(r: &Registry) {
+        let counter = register_counter_vec_with_registry!(
+            "aframp_spawn_error_total",
+            "Total number of errors (panics or JoinError) from fire-and-forget spawned tasks",
+            &["task_name"],
+            r
+        )
+        .expect("failed to register aframp_spawn_error_total");
+        let _ = SPAWN_ERROR_TOTAL.set(counter);
+    }
+
+    /// Increment the spawn error counter for the given `task_name`.
+    ///
+    /// Call this from the JoinHandle await path or inside a `catch_unwind` wrapper.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use crate::metrics::spawn as spawn_metrics;
+    ///
+    /// let handle = tokio::spawn(async move { /* work */ });
+    /// if let Err(err) = handle.await {
+    ///     spawn_metrics::inc_error("audit_log");
+    ///     tracing::error!(task = "audit_log", error = %err, "spawned task failed");
+    /// }
+    /// ```
+    pub fn inc_error(task_name: &str) {
+        if let Some(c) = SPAWN_ERROR_TOTAL.get() {
+            c.with_label_values(&[task_name]).inc();
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

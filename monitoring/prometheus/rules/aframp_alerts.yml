@@ -581,3 +581,161 @@ groups:
             The automated integrity check for the latest database snapshot failed.
             The backup may be corrupt or incomplete.
           runbook: "https://runbooks.aframp.io/backup-verification-failed"
+
+  # ===========================================================================
+  # Mint Reserve Ratio / Peg Integrity Alerts  (#786)
+  # ===========================================================================
+  - name: aframp.peg_integrity
+    interval: 60s
+    rules:
+      # Recording rule: ratio of CNGN supply to reserves (updated every minute)
+      - record: aframp:cngn_reserve_ratio:hourly
+        expr: |
+          aframp_cngn_total_supply_units / clamp_min(aframp_cngn_total_reserves_units, 1)
+
+      # CRITICAL — supply exceeds reserves by more than 0.01%
+      - alert: MintReserveRatioCritical
+        expr: |
+          aframp:cngn_reserve_ratio:hourly > 1.0001
+        for: 5m
+        labels:
+          severity: critical
+          team: oncall
+          page: "true"
+        annotations:
+          summary: "CRITICAL: CNGN supply exceeds reserves by >0.01% (ratio {{ $value | humanize }})"
+          description: >
+            The CNGN supply-to-reserve ratio has exceeded 1.0001 for more than 5 minutes.
+            Current ratio: {{ $value }}.
+            This indicates a potential peg integrity breach. Page on-call immediately.
+            Source view: migrations/20260430100000_peg_integrity_monitor.sql
+          runbook: "https://runbooks.aframp.io/mint-reserve-ratio-critical"
+
+      # WARNING — supply exceeds reserves by more than 0.001%
+      - alert: MintReserveRatioWarning
+        expr: |
+          aframp:cngn_reserve_ratio:hourly > 1.00001
+        for: 15m
+        labels:
+          severity: warning
+          team: engineering
+        annotations:
+          summary: "WARNING: CNGN supply exceeds reserves by >0.001% (ratio {{ $value | humanize }})"
+          description: >
+            The CNGN supply-to-reserve ratio has exceeded 1.00001 for more than 15 minutes.
+            Current ratio: {{ $value }}.
+            Investigate reserve attestation data before this escalates to CRITICAL.
+          runbook: "https://runbooks.aframp.io/mint-reserve-ratio-warning"
+
+      # INFO — reserves data stale (metric not updated in 2 hours)
+      - alert: MintReserveDataStale
+        expr: |
+          (time() - aframp_cngn_reserves_last_updated_timestamp) > 7200
+        for: 5m
+        labels:
+          severity: warning
+          team: engineering
+        annotations:
+          summary: "CNGN reserve data has not been updated in >2 hours"
+          description: >
+            The aframp_cngn_reserves_last_updated_timestamp metric has not been refreshed
+            for more than 2 hours. Reserve attestation pipeline may be broken.
+          runbook: "https://runbooks.aframp.io/mint-reserve-data-stale"
+
+  # ===========================================================================
+  # SLO Error Budget Burn Rate Alerts  (#788)
+  # SLOs: Availability 99.9% | P99 latency ≤ 500ms | Error rate ≤ 0.1%
+  # ===========================================================================
+  - name: aframp.slo
+    interval: 60s
+    rules:
+      # Recording rules for multi-window burn rates
+      - record: aframp:http_error_rate:1h
+        expr: |
+          sum(rate(aframp_http_requests_total{status_code=~"5.."}[1h]))
+          / clamp_min(sum(rate(aframp_http_requests_total[1h])), 1)
+
+      - record: aframp:http_error_rate:6h
+        expr: |
+          sum(rate(aframp_http_requests_total{status_code=~"5.."}[6h]))
+          / clamp_min(sum(rate(aframp_http_requests_total[6h])), 1)
+
+      - record: aframp:http_error_rate:24h
+        expr: |
+          sum(rate(aframp_http_requests_total{status_code=~"5.."}[24h]))
+          / clamp_min(sum(rate(aframp_http_requests_total[24h])), 1)
+
+      - record: aframp:http_error_rate:72h
+        expr: |
+          sum(rate(aframp_http_requests_total{status_code=~"5.."}[72h]))
+          / clamp_min(sum(rate(aframp_http_requests_total[72h])), 1)
+
+      # Fast burn: 1h rate > 2× error budget consumption rate
+      - alert: SLOFastBurnRate1h
+        expr: |
+          (aframp:http_error_rate:1h / 0.001) > 2
+        for: 2m
+        labels:
+          severity: critical
+          team: oncall
+          slo: availability
+        annotations:
+          summary: "SLO fast burn: error budget burning at {{ $value | humanize }}× rate (1h window)"
+          description: >
+            The 1-hour error rate ({{ $value | humanizePercentage }}) exceeds 2× the SLO error budget
+            (0.1%). At this rate the 30-day error budget will be exhausted in <15 hours.
+            Page on-call and investigate immediately.
+          runbook: "https://runbooks.aframp.io/slo-fast-burn"
+
+      # Fast burn: 6h rate confirms the trend
+      - alert: SLOFastBurnRate6h
+        expr: |
+          (aframp:http_error_rate:1h / 0.001) > 2
+          and
+          (aframp:http_error_rate:6h / 0.001) > 2
+        for: 2m
+        labels:
+          severity: critical
+          team: oncall
+          slo: availability
+        annotations:
+          summary: "SLO fast burn confirmed over 1h+6h windows ({{ $value | humanize }}×)"
+          description: >
+            Both 1h and 6h error budget burn rates exceed 2×. This is a sustained outage,
+            not a spike. Error budget will be exhausted in <15 hours.
+          runbook: "https://runbooks.aframp.io/slo-fast-burn"
+
+      # Slow burn: 24h rate > 1.1×
+      - alert: SLOSlowBurnRate24h
+        expr: |
+          (aframp:http_error_rate:24h / 0.001) > 1.1
+        for: 15m
+        labels:
+          severity: warning
+          team: engineering
+          slo: availability
+        annotations:
+          summary: "SLO slow burn: error budget burning at {{ $value | humanize }}× rate (24h window)"
+          description: >
+            The 24-hour error rate is {{ $value | humanize }}× the SLO error budget.
+            At this rate the monthly error budget will be exhausted within the month.
+            Investigate and remediate before the situation worsens.
+          runbook: "https://runbooks.aframp.io/slo-slow-burn"
+
+      # P99 latency SLO violation
+      - alert: SLOP99LatencyViolation
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(aframp_http_request_duration_seconds_bucket[5m])) by (le)
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          team: engineering
+          slo: latency
+        annotations:
+          summary: "P99 latency SLO violation: {{ $value | humanizeDuration }} (target ≤ 500ms)"
+          description: >
+            The 99th-percentile HTTP response latency has exceeded 500ms for more than 5 minutes.
+            Current P99: {{ $value | humanizeDuration }}.
+          runbook: "https://runbooks.aframp.io/slo-latency-violation"
