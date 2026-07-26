@@ -23,6 +23,10 @@ pub struct HealthStatus {
 #[derive(Debug, Serialize, Clone)]
 pub enum HealthState {
     Healthy,
+    /// Cache warming is still in progress. The service is otherwise healthy and
+    /// DOES accept traffic — this is a degraded-but-serving state, distinct from
+    /// `Unhealthy`, so load balancers don't restart the instance mid-warmup.
+    Warming,
     Degraded,
     Unhealthy,
 }
@@ -52,8 +56,33 @@ impl HealthStatus {
         }
     }
 
+    /// Whether the service should be considered up for load-balancer purposes.
+    /// `Warming` counts as healthy: the service accepts traffic while cache
+    /// warmup finishes in the background.
     pub fn is_healthy(&self) -> bool {
-        matches!(self.status, HealthState::Healthy)
+        matches!(self.status, HealthState::Healthy | HealthState::Warming)
+    }
+
+    /// Merge cache-warming state into this health status. Escalates to
+    /// `Warming` only when nothing else has already reported Degraded/Unhealthy,
+    /// so a real dependency failure during warmup is never masked.
+    fn apply_warming(&mut self, ws: &WarmingState) {
+        if !ws.is_ready() {
+            let pct = ws.progress_pct();
+            self.checks.insert(
+                "cache_warming".to_string(),
+                ComponentHealth::warning(
+                    None,
+                    Some(format!("Cache warming in progress ({}%)", pct)),
+                ),
+            );
+            if matches!(self.status, HealthState::Healthy) {
+                self.status = HealthState::Warming;
+            }
+        } else {
+            self.checks
+                .insert("cache_warming".to_string(), ComponentHealth::up(None));
+        }
     }
 }
 
@@ -89,7 +118,8 @@ pub struct HealthChecker {
     db_pool: Option<sqlx::PgPool>,
     cache: Option<RedisCache>,
     stellar_client: Option<StellarClient>,
-    /// Readiness gate: unhealthy until cache warming completes.
+    /// Reports `Warming` (not `Unhealthy`) with progress until cache warming
+    /// completes — the service still accepts traffic throughout.
     pub warming_state: Option<WarmingState>,
     /// Optional replication monitor for circuit-breaker-aware lag checks.
     pub replication_monitor: Option<crate::database::replication_monitor::ReplicationMonitor>,
@@ -110,7 +140,8 @@ impl HealthChecker {
         }
     }
 
-    /// Attach a warming state so the readiness probe blocks until warming is done.
+    /// Attach a warming state so health checks report `Warming` (with progress)
+    /// instead of `Unhealthy` while cache warming is still in progress.
     pub fn with_warming_state(mut self, state: WarmingState) -> Self {
         self.warming_state = Some(state);
         self
@@ -258,19 +289,12 @@ impl HealthChecker {
             HealthState::Unhealthy
         };
 
-        // Readiness gate: report Unhealthy until cache warming completes.
+        // Cache warming: reported as a degraded-but-serving `Warming` state, not
+        // `Unhealthy` — the server accepts traffic immediately on startup and
+        // warms caches in the background (Issue: premature LB restarts during
+        // warmup).
         if let Some(ref ws) = self.warming_state {
-            if !ws.is_ready() {
-                health_status.checks.insert(
-                    "cache_warming".to_string(),
-                    ComponentHealth::down(Some("Cache warming not yet complete".to_string())),
-                );
-                health_status.status = HealthState::Unhealthy;
-            } else {
-                health_status
-                    .checks
-                    .insert("cache_warming".to_string(), ComponentHealth::up(None));
-            }
+            health_status.apply_warming(ws);
         }
 
         health_status
@@ -352,6 +376,45 @@ mod tests {
         assert!(matches!(warning_health.status, ComponentState::Warning));
         assert_eq!(warning_health.response_time_ms, Some(500));
         assert_eq!(warning_health.details, Some("Slow response".to_string()));
+    }
+
+    #[test]
+    fn test_warming_reports_degraded_not_unhealthy() {
+        // Regression test: cache warming in progress must never force
+        // Unhealthy — that causes premature load-balancer restarts.
+        let ws = WarmingState::new();
+        let mut status = HealthStatus::new();
+        status.apply_warming(&ws);
+
+        assert!(matches!(status.status, HealthState::Warming));
+        assert!(status.is_healthy(), "Warming must still accept traffic");
+        let check = status.checks.get("cache_warming").unwrap();
+        assert!(matches!(check.status, ComponentState::Warning));
+        assert!(check.details.as_ref().unwrap().contains("0%"));
+    }
+
+    #[test]
+    fn test_warming_does_not_mask_existing_unhealthy_status() {
+        let ws = WarmingState::new();
+        let mut status = HealthStatus::new();
+        status.status = HealthState::Unhealthy;
+        status.apply_warming(&ws);
+
+        // A real dependency failure must not be overwritten by the warming state.
+        assert!(matches!(status.status, HealthState::Unhealthy));
+    }
+
+    #[test]
+    fn test_warming_ready_reports_healthy() {
+        let _ = crate::metrics::registry(); // mark_ready() publishes the progress gauge
+        let ws = WarmingState::new();
+        ws.mark_ready();
+        let mut status = HealthStatus::new();
+        status.apply_warming(&ws);
+
+        assert!(matches!(status.status, HealthState::Healthy));
+        let check = status.checks.get("cache_warming").unwrap();
+        assert!(matches!(check.status, ComponentState::Up));
     }
 }
 
