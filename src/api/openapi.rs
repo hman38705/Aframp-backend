@@ -1,10 +1,21 @@
 //! OpenAPI / Swagger documentation.
 //!
 //! Routes:
-//!   GET /docs              — Swagger UI (non-production only)
-//!   GET /docs/openapi.json — Raw OpenAPI 3.0 JSON (all environments)
+//!   GET /docs              — Swagger UI
+//!   GET /docs/openapi.json — Raw OpenAPI 3.0 JSON
+//!
+//! In production the full API schema (including internal admin endpoint
+//! paths) is sensitive, so both routes require a static bearer token
+//! (`SWAGGER_API_KEY`) in that environment. Dev/staging remain open. Set
+//! `SWAGGER_ENABLED=false` to disable Swagger entirely, in any environment.
 
-use axum::{routing::get, Router};
+use axum::{
+    extract::Request,
+    http::{header, StatusCode},
+    middleware::Next,
+    response::{IntoResponse, Response},
+    Router,
+};
 use serde::{Deserialize, Serialize};
 use utoipa::{
     openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme},
@@ -521,35 +532,232 @@ See the cNGN Integration Guide in `/docs/cngn/` for setup instructions.
 )]
 pub struct ApiDoc;
 
+// ─── Environment / access gating ─────────────────────────────────────────────
+
+/// Current deployment environment, checking `ENVIRONMENT` then falling back
+/// to `APP_ENV` — the same precedence used elsewhere (e.g.
+/// `middleware::security`, `middleware::cors`).
+fn current_environment() -> String {
+    std::env::var("ENVIRONMENT")
+        .or_else(|_| std::env::var("APP_ENV"))
+        .unwrap_or_else(|_| "development".to_string())
+        .to_lowercase()
+}
+
+fn is_production() -> bool {
+    current_environment() == "production"
+}
+
+/// `SWAGGER_ENABLED=false` disables Swagger entirely, in any environment.
+/// Defaults to enabled.
+fn swagger_enabled() -> bool {
+    std::env::var("SWAGGER_ENABLED")
+        .map(|v| v.to_lowercase() != "false")
+        .unwrap_or(true)
+}
+
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.bytes()
+        .zip(b.bytes())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
+}
+
+/// Extract a bearer/API-key style credential from the request: either a
+/// standard `Authorization: Bearer <token>` header, or `X-Swagger-Key:
+/// <token>` for callers that can't easily set an Authorization header
+/// (e.g. a browser navigating to `/docs` directly).
+fn extract_swagger_token(req: &Request) -> Option<String> {
+    if let Some(v) = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+    {
+        return Some(v.to_string());
+    }
+    req.headers()
+        .get("x-swagger-key")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.to_string())
+}
+
+/// Gate `/docs` and `/docs/openapi.json` behind `SWAGGER_API_KEY` in
+/// production. Fails closed: if `SWAGGER_API_KEY` isn't configured, every
+/// request is rejected rather than falling open.
+async fn swagger_auth_middleware(req: Request, next: Next) -> Response {
+    let expected = std::env::var("SWAGGER_API_KEY").unwrap_or_default();
+    let provided = extract_swagger_token(&req);
+
+    let authorized = !expected.is_empty()
+        && provided
+            .as_deref()
+            .is_some_and(|p| constant_time_eq(p, &expected));
+
+    if authorized {
+        next.run(req).await
+    } else {
+        (
+            StatusCode::UNAUTHORIZED,
+            [(header::WWW_AUTHENTICATE, "Bearer realm=\"swagger\"")],
+            "Unauthorized",
+        )
+            .into_response()
+    }
+}
+
 // ─── Route Builder ───────────────────────────────────────────────────────────
 
 /// Build the Axum router for OpenAPI documentation endpoints.
 ///
-/// - `GET /docs/openapi.json` is always mounted.
-/// - `GET /docs` (Swagger UI) is only mounted in non-production environments.
+/// - `GET /docs` (Swagger UI) and `GET /docs/openapi.json` are always mounted
+///   together, unless `SWAGGER_ENABLED=false`.
+/// - In production both routes require `Authorization: Bearer <SWAGGER_API_KEY>`
+///   (or an `X-Swagger-Key` header). Dev/staging are unauthenticated.
 pub fn openapi_routes() -> Router {
-    let environment = std::env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string());
-    let serve_ui = environment != "production";
+    if !swagger_enabled() {
+        return Router::new();
+    }
 
     let openapi = ApiDoc::openapi();
+    let docs_router = Router::new().merge(SwaggerUi::new("/docs").url("/docs/openapi.json", openapi));
 
-    if serve_ui {
-        Router::new().merge(SwaggerUi::new("/docs").url("/docs/openapi.json", openapi))
+    if is_production() {
+        docs_router.layer(axum::middleware::from_fn(swagger_auth_middleware))
     } else {
-        // In production only serve the raw JSON at /docs/openapi.json
-        let spec_json = openapi.to_json().unwrap_or_else(|_| "{}".to_string());
-        Router::new().route(
+        docs_router
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use tower::ServiceExt;
+
+    // Env vars are process-global and these tests mutate them directly
+    // (matching the existing convention in middleware::cors's tests) — each
+    // test resets everything it touches at the top, so ordering doesn't matter
+    // even though `cargo test` runs them on separate threads within this binary.
+    fn reset_env() {
+        std::env::remove_var("ENVIRONMENT");
+        std::env::remove_var("APP_ENV");
+        std::env::remove_var("SWAGGER_API_KEY");
+        std::env::remove_var("SWAGGER_ENABLED");
+    }
+
+    async fn get(app: Router, uri: &str, auth_header: Option<&str>) -> StatusCode {
+        let mut builder = Request::builder().uri(uri);
+        if let Some(h) = auth_header {
+            builder = builder.header(header::AUTHORIZATION, h);
+        }
+        let response = app.oneshot(builder.body(Body::empty()).unwrap()).await.unwrap();
+        response.status()
+    }
+
+    #[tokio::test]
+    async fn test_production_without_token_returns_401() {
+        reset_env();
+        std::env::set_var("ENVIRONMENT", "production");
+        std::env::set_var("SWAGGER_API_KEY", "secret-token");
+
+        let status = get(openapi_routes(), "/docs/openapi.json", None).await;
+
+        reset_env();
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_production_with_correct_token_is_authorized() {
+        reset_env();
+        std::env::set_var("ENVIRONMENT", "production");
+        std::env::set_var("SWAGGER_API_KEY", "secret-token");
+
+        let status = get(
+            openapi_routes(),
             "/docs/openapi.json",
-            get(move || {
-                let json = spec_json.clone();
-                async move {
-                    (
-                        axum::http::StatusCode::OK,
-                        [("content-type", "application/json")],
-                        json,
-                    )
-                }
-            }),
+            Some("Bearer secret-token"),
         )
+        .await;
+
+        reset_env();
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_production_with_wrong_token_returns_401() {
+        reset_env();
+        std::env::set_var("ENVIRONMENT", "production");
+        std::env::set_var("SWAGGER_API_KEY", "secret-token");
+
+        let status = get(
+            openapi_routes(),
+            "/docs/openapi.json",
+            Some("Bearer wrong-token"),
+        )
+        .await;
+
+        reset_env();
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_production_without_configured_key_fails_closed() {
+        reset_env();
+        std::env::set_var("ENVIRONMENT", "production");
+        // SWAGGER_API_KEY intentionally left unset.
+
+        let status = get(
+            openapi_routes(),
+            "/docs/openapi.json",
+            Some("Bearer anything"),
+        )
+        .await;
+
+        reset_env();
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "must fail closed when no key is configured"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_development_is_unauthenticated() {
+        reset_env();
+        std::env::set_var("ENVIRONMENT", "development");
+
+        let status = get(openapi_routes(), "/docs/openapi.json", None).await;
+
+        reset_env();
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_swagger_disabled_returns_404_regardless_of_environment() {
+        reset_env();
+        std::env::set_var("ENVIRONMENT", "production");
+        std::env::set_var("SWAGGER_API_KEY", "secret-token");
+        std::env::set_var("SWAGGER_ENABLED", "false");
+
+        let status = get(
+            openapi_routes(),
+            "/docs/openapi.json",
+            Some("Bearer secret-token"),
+        )
+        .await;
+
+        reset_env();
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn test_constant_time_eq() {
+        assert!(constant_time_eq("abc", "abc"));
+        assert!(!constant_time_eq("abc", "abd"));
+        assert!(!constant_time_eq("abc", "abcd"));
     }
 }

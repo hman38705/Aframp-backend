@@ -133,7 +133,12 @@ fn load_app_config() -> anyhow::Result<config::AppConfig> {
             None
         };
 
-    // --- Cache warming (must complete before traffic is accepted) ---
+    // --- Cache warming ---
+    // Runs in a detached background task so it never blocks server startup —
+    // the listener binds and starts accepting traffic immediately. The health
+    // endpoint reports `Warming` (not `Unhealthy`) with a progress percentage
+    // until `warm_caches` calls `warming_state.mark_ready()`, so load balancers
+    // don't restart the instance mid-warmup (see src/health.rs, src/cache/warmer.rs).
     if let (Some(ref pool), Some(ref redis), Some(ref ml)) =
         (&db_pool, &redis_cache, &shared_ml_cache)
     {
@@ -1869,6 +1874,8 @@ fn validate_production_config() -> anyhow::Result<()> {
     };
 
     // ── OpenAPI / Swagger UI (Issue #114) ────────────────────────────────────
+    // Gating (production auth via SWAGGER_API_KEY, SWAGGER_ENABLED kill switch)
+    // lives in api::openapi::openapi_routes() itself — see src/api/openapi.rs.
     let openapi_routes = api::openapi::openapi_routes();
 
     // ── Remittance Partner routes (Issue #408) ────────────────────────────────

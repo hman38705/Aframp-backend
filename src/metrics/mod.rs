@@ -12,7 +12,8 @@ pub mod tests;
 
 use prometheus::{
     register_counter_vec_with_registry, register_gauge_vec_with_registry,
-    register_histogram_vec_with_registry, CounterVec, GaugeVec, HistogramVec, Registry,
+    register_gauge_with_registry, register_histogram_vec_with_registry, CounterVec, Gauge,
+    GaugeVec, HistogramVec, Registry,
 };
 use std::sync::OnceLock;
 
@@ -531,6 +532,15 @@ pub mod cache {
     static CDN_CACHE_STATUS_TOTAL: OnceLock<CounterVec> = OnceLock::new();
     static REDIS_MEMORY_USED_BYTES: OnceLock<GaugeVec> = OnceLock::new();
     static REDIS_MAXMEMORY_BYTES: OnceLock<GaugeVec> = OnceLock::new();
+    static CACHE_WARMUP_PROGRESS_PCT: OnceLock<Gauge> = OnceLock::new();
+
+    /// Cache warmup progress, 0-100. Reaches 100 once `WarmingState::mark_ready`
+    /// is called; read by dashboards/alerts to catch stalled warmups.
+    pub fn cache_warmup_progress_pct() -> &'static Gauge {
+        CACHE_WARMUP_PROGRESS_PCT
+            .get()
+            .expect("metrics not initialised")
+    }
 
     pub fn redis_memory_used_bytes() -> &'static GaugeVec {
         REDIS_MEMORY_USED_BYTES.get().expect("metrics not initialised")
@@ -645,6 +655,17 @@ pub mod cache {
                     "aframp_redis_maxmemory_bytes",
                     "Redis maxmemory configured limit in bytes (0 = unlimited)",
                     &["instance"],
+                    r
+                )
+                .unwrap(),
+            )
+            .ok();
+
+        CACHE_WARMUP_PROGRESS_PCT
+            .set(
+                register_gauge_with_registry!(
+                    "aframp_cache_warmup_progress_pct",
+                    "Startup cache warmup progress, 0-100",
                     r
                 )
                 .unwrap(),
