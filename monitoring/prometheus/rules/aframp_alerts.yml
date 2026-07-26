@@ -141,6 +141,23 @@ groups:
             This may indicate Redis unavailability or cache invalidation issues.
           runbook: "https://runbooks.aframp.io/cache-miss-rate"
 
+      # Redis bb8 pool exhaustion — connection acquisitions blocked waiting on the pool
+      - alert: RedisPoolExhaustion
+        expr: |
+          aframp_redis_pool_pending > 10
+        for: 2m
+        labels:
+          severity: warning
+          team: engineering
+        annotations:
+          summary: "Redis connection pool exhausted ({{ $value }} pending acquisitions)"
+          description: >
+            {{ $value }} requests are currently blocked waiting for a Redis connection on
+            instance {{ $labels.instance }}. Pool size and idle connections are exposed via
+            aframp_redis_pool_size / aframp_redis_pool_idle. Consider raising
+            REDIS_MAX_CONNECTIONS or investigating slow/stuck Redis operations.
+          runbook: "https://runbooks.aframp.io/redis-pool-exhaustion"
+
   # ===========================================================================
   # Transaction Failure Alerts
   # ===========================================================================

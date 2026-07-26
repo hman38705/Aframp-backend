@@ -1,6 +1,6 @@
 //! Business logic for Wallet Creation & Stellar Account Provisioning (Issue #322).
 
-// REMOVED: use crate::chains::stellar::client::StellarClient;
+use crate::chains::stellar::client::StellarClient;
 use crate::error::Error;
 use crate::wallet_provisioning::{
     bip44::{

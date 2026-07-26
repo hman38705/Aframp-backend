@@ -435,6 +435,57 @@ pub mod stellar {
 }
 
 // ---------------------------------------------------------------------------
+// Stellar Horizon endpoint health metrics
+// ---------------------------------------------------------------------------
+
+pub mod stellar_horizon {
+    use super::*;
+
+    static HORIZON_ENDPOINT_SUCCESS_RATE: OnceLock<GaugeVec> = OnceLock::new();
+    static HORIZON_ENDPOINT_HEALTHY: OnceLock<GaugeVec> = OnceLock::new();
+
+    /// EWMA success rate (0.0-1.0) per Horizon/RPC endpoint.
+    pub fn endpoint_success_rate() -> &'static GaugeVec {
+        HORIZON_ENDPOINT_SUCCESS_RATE
+            .get()
+            .expect("metrics not initialised")
+    }
+
+    /// Whether an endpoint is currently in rotation (1) or circuit-broken out (0).
+    pub fn endpoint_healthy() -> &'static GaugeVec {
+        HORIZON_ENDPOINT_HEALTHY
+            .get()
+            .expect("metrics not initialised")
+    }
+
+    pub(super) fn register(r: &Registry) {
+        HORIZON_ENDPOINT_SUCCESS_RATE
+            .set(
+                register_gauge_vec_with_registry!(
+                    "aframp_horizon_endpoint_success_rate",
+                    "EWMA success rate (0.0-1.0) per Horizon/RPC endpoint",
+                    &["endpoint"],
+                    r
+                )
+                .unwrap(),
+            )
+            .ok();
+
+        HORIZON_ENDPOINT_HEALTHY
+            .set(
+                register_gauge_vec_with_registry!(
+                    "aframp_horizon_endpoint_healthy",
+                    "Whether a Horizon/RPC endpoint is in rotation (1) or circuit-broken out (0)",
+                    &["endpoint"],
+                    r
+                )
+                .unwrap(),
+            )
+            .ok();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Background worker metrics
 // ---------------------------------------------------------------------------
 
@@ -541,6 +592,10 @@ pub mod cache {
             .get()
             .expect("metrics not initialised")
     }
+    static REDIS_POOL_SIZE: OnceLock<GaugeVec> = OnceLock::new();
+    static REDIS_POOL_IDLE: OnceLock<GaugeVec> = OnceLock::new();
+    static REDIS_POOL_PENDING: OnceLock<GaugeVec> = OnceLock::new();
+    static CACHE_INVALIDATION_TOTAL: OnceLock<CounterVec> = OnceLock::new();
 
     pub fn redis_memory_used_bytes() -> &'static GaugeVec {
         REDIS_MEMORY_USED_BYTES.get().expect("metrics not initialised")
@@ -548,6 +603,30 @@ pub mod cache {
 
     pub fn redis_maxmemory_bytes() -> &'static GaugeVec {
         REDIS_MAXMEMORY_BYTES.get().expect("metrics not initialised")
+    }
+
+    /// Total bb8 pool connections (in-use + idle).
+    pub fn redis_pool_size() -> &'static GaugeVec {
+        REDIS_POOL_SIZE.get().expect("metrics not initialised")
+    }
+
+    /// Idle (checked-in, available) bb8 pool connections.
+    pub fn redis_pool_idle() -> &'static GaugeVec {
+        REDIS_POOL_IDLE.get().expect("metrics not initialised")
+    }
+
+    /// Connection acquisitions currently blocked waiting on the pool (all
+    /// connections busy). Sustained values > 10 indicate pool exhaustion —
+    /// see the RedisPoolExhaustion alert rule.
+    pub fn redis_pool_pending() -> &'static GaugeVec {
+        REDIS_POOL_PENDING.get().expect("metrics not initialised")
+    }
+
+    /// Cache invalidations triggered by admin mutations, by reason.
+    pub fn cache_invalidation_total() -> &'static CounterVec {
+        CACHE_INVALIDATION_TOTAL
+            .get()
+            .expect("metrics not initialised")
     }
 
     pub fn hits_total() -> &'static CounterVec {
@@ -666,6 +745,48 @@ pub mod cache {
                 register_gauge_with_registry!(
                     "aframp_cache_warmup_progress_pct",
                     "Startup cache warmup progress, 0-100",
+        REDIS_POOL_SIZE
+            .set(
+                register_gauge_vec_with_registry!(
+                    "aframp_redis_pool_size",
+                    "Total bb8 Redis pool connections (in-use + idle)",
+                    &["instance"],
+                    r
+                )
+                .unwrap(),
+            )
+            .ok();
+
+        REDIS_POOL_IDLE
+            .set(
+                register_gauge_vec_with_registry!(
+                    "aframp_redis_pool_idle",
+                    "Idle (checked-in) bb8 Redis pool connections",
+                    &["instance"],
+                    r
+                )
+                .unwrap(),
+            )
+            .ok();
+
+        REDIS_POOL_PENDING
+            .set(
+                register_gauge_vec_with_registry!(
+                    "aframp_redis_pool_pending",
+                    "Connection acquisitions currently blocked waiting on the Redis pool",
+                    &["instance"],
+                    r
+                )
+                .unwrap(),
+            )
+            .ok();
+
+        CACHE_INVALIDATION_TOTAL
+            .set(
+                register_counter_vec_with_registry!(
+                    "aframp_cache_invalidation_total",
+                    "Total cache invalidations by reason",
+                    &["reason"],
                     r
                 )
                 .unwrap(),
@@ -946,6 +1067,7 @@ fn register_all(r: &Registry) {
     cngn::register(r);
     payment::register(r);
     stellar::register(r);
+    stellar_horizon::register(r);
     worker::register(r);
     cache::register(r);
     database::register(r);

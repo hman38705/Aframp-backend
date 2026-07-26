@@ -12,7 +12,7 @@
 
 use crate::audit::models::{AuditActorType, AuditEventCategory, AuditOutcome, PendingAuditEntry};
 use crate::audit::writer::AuditWriter;
-// REMOVED: use crate::chains::stellar::client::StellarClient;
+use crate::chains::stellar::client::StellarClient;
 use crate::security::{AnomalyDetectionService, AnomalyType, TenantBalance, MerkleTree};
 use crate::metrics::por::{
     merkle_tree_construction_duration_seconds, proof_anchoring_failures_total,

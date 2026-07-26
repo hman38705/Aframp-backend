@@ -26,3 +26,7 @@ pub use error::{SubmissionError, SubmissionResult};
 pub use models::*;
 pub use retry_state_machine::RetryStateMachine;
 
+/// Re-export so `crate::stellar::StellarClient` (used by workers/reconciliation.rs)
+/// resolves to the same compatibility shim as `crate::chains::stellar::client::StellarClient`.
+pub use crate::chains::stellar::client::StellarClient;
+
