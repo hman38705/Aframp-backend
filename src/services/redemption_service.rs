@@ -1,5 +1,5 @@
-// REMOVED: use crate::chains::stellar::client::StellarClient;
-// REMOVED: use crate::chains::stellar::errors::StellarError;
+use crate::chains::stellar::client::StellarClient;
+use crate::chains::stellar::errors::StellarError;
 use crate::database::models::redemption::{
     CreateRedemptionRequest, RedemptionConfig, RedemptionError, RedemptionRequest,
     RedemptionRequestResponse, RedemptionStatusResponse,

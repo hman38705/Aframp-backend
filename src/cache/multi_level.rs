@@ -157,6 +157,78 @@ impl MultiLevelCache {
         info!(l1_key, l2_key, "Both cache levels invalidated");
     }
 
+    /// Invalidate every L1 (across all shards) and L2 key whose key starts
+    /// with `key_prefix`. Returns the total number of keys removed.
+    ///
+    /// Intended for admin-triggered invalidation when fee structures,
+    /// corridor configs, or provider settings are mutated — since the
+    /// mutating handler may not know which cache level(s) or exact key
+    /// currently hold the stale value, this covers all three L1 shards plus
+    /// an L2 `SCAN`-based pattern delete.
+    pub async fn invalidate_prefix(&self, key_prefix: &str) -> u64 {
+        let mut removed: u64 = 0;
+
+        for shard in [
+            &self.l1.fee_structures,
+            &self.l1.currency_configs,
+            &self.l1.provider_lists,
+        ] {
+            for key in shard.keys_with_prefix(key_prefix) {
+                shard.invalidate(&key).await;
+                removed += 1;
+            }
+        }
+
+        let l2_pattern = format!("{}*", key_prefix);
+        match CacheTrait::<serde_json::Value>::delete_pattern(&self.l2, &l2_pattern).await {
+            Ok(n) => removed += n,
+            Err(e) => debug!(pattern = %l2_pattern, error = %e, "L2 prefix invalidation failed (degraded)"),
+        }
+
+        info!(key_prefix, removed, "Prefix cache invalidation complete");
+        removed
+    }
+
+    /// [`invalidate_prefix`] plus an audit row in `cache_invalidation_logs`
+    /// and the `aframp_cache_invalidation_total{reason}` metric — the entry
+    /// point admin mutation handlers should call.
+    ///
+    /// [`invalidate_prefix`]: MultiLevelCache::invalidate_prefix
+    pub async fn invalidate_prefix_logged(
+        &self,
+        pool: &sqlx::PgPool,
+        key_prefix: &str,
+        initiator_id: Option<uuid::Uuid>,
+        initiator_role: &str,
+        reason: &str,
+    ) -> u64 {
+        let removed = self.invalidate_prefix(key_prefix).await;
+
+        let pattern = format!("{}*", key_prefix);
+        if let Err(e) = sqlx::query(
+            r#"INSERT INTO cache_invalidation_logs
+               (initiator_id, initiator_role, target_namespace, pattern_used, keys_deleted, reason)
+               VALUES ($1, $2, $3, $4, $5, $6)"#,
+        )
+        .bind(initiator_id)
+        .bind(initiator_role)
+        .bind(key_prefix)
+        .bind(&pattern)
+        .bind(removed as i64)
+        .bind(reason)
+        .execute(pool)
+        .await
+        {
+            debug!(error = %e, "Failed to write cache_invalidation_logs row (degraded)");
+        }
+
+        crate::metrics::cache::cache_invalidation_total()
+            .with_label_values(&[reason])
+            .inc();
+
+        removed
+    }
+
     // -------------------------------------------------------------------------
     // Single-flight get-or-rebuild (stampede protection)
     // -------------------------------------------------------------------------
@@ -228,5 +300,101 @@ impl MultiLevelCache {
             L1Category::CurrencyConfigs => &self.l1.currency_configs,
             L1Category::ProviderLists => &self.l1.provider_lists,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache::l1::L1Cache;
+    use prometheus::Registry;
+
+    async fn test_cache() -> MultiLevelCache {
+        let registry = Registry::new();
+        let l1_metrics = crate::cache::metrics::L1Metrics::new(&registry);
+        let l2_metrics = crate::cache::metrics::L2Metrics::new(&registry);
+        let size_metrics = crate::cache::metrics::CacheSizeMetrics::new(&registry);
+        let l1 = L1Cache::new(l1_metrics.clone());
+
+        // Deliberately unreachable — L2 operations degrade gracefully to no-ops,
+        // which is fine since this test only exercises L1 prefix matching.
+        let manager = bb8_redis::RedisConnectionManager::new("redis://127.0.0.1:1").unwrap();
+        let pool = bb8::Pool::builder()
+            .max_size(1)
+            .connection_timeout(std::time::Duration::from_millis(50))
+            .build_unchecked(manager);
+        let redis = RedisCache::new(pool);
+
+        MultiLevelCache::new(l1, redis, l1_metrics.clone(), l2_metrics, size_metrics)
+    }
+
+    #[tokio::test]
+    async fn test_invalidate_prefix_removes_matching_l1_keys_only() {
+        let cache = test_cache().await;
+
+        cache
+            .l1_insert(L1Category::FeeStructures, "corridor:ng-us:v1".to_string(), &1)
+            .await;
+        cache
+            .l1_insert(L1Category::FeeStructures, "corridor:ng-us:v2".to_string(), &2)
+            .await;
+        cache
+            .l1_insert(L1Category::FeeStructures, "corridor:gh-ng:v1".to_string(), &3)
+            .await;
+        cache
+            .l1_insert(L1Category::CurrencyConfigs, "corridor:ng-us:currency".to_string(), &4)
+            .await;
+        cache
+            .l1_insert(L1Category::FeeStructures, "unrelated:key".to_string(), &5)
+            .await;
+
+        let removed = cache.invalidate_prefix("corridor:ng-us").await;
+        assert_eq!(removed, 3, "should remove the 3 keys matching the prefix across shards");
+
+        assert_eq!(
+            cache
+                .l1_get::<i32>(L1Category::FeeStructures, "corridor:ng-us:v1")
+                .await,
+            None
+        );
+        assert_eq!(
+            cache
+                .l1_get::<i32>(L1Category::FeeStructures, "corridor:ng-us:v2")
+                .await,
+            None
+        );
+        assert_eq!(
+            cache
+                .l1_get::<i32>(L1Category::CurrencyConfigs, "corridor:ng-us:currency")
+                .await,
+            None
+        );
+
+        // Non-matching keys survive.
+        assert_eq!(
+            cache
+                .l1_get::<i32>(L1Category::FeeStructures, "corridor:gh-ng:v1")
+                .await,
+            Some(3)
+        );
+        assert_eq!(
+            cache.l1_get::<i32>(L1Category::FeeStructures, "unrelated:key").await,
+            Some(5)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_invalidate_prefix_no_match_removes_nothing() {
+        let cache = test_cache().await;
+        cache
+            .l1_insert(L1Category::ProviderLists, "provider:a".to_string(), &1)
+            .await;
+
+        let removed = cache.invalidate_prefix("nonexistent:").await;
+        assert_eq!(removed, 0);
+        assert_eq!(
+            cache.l1_get::<i32>(L1Category::ProviderLists, "provider:a").await,
+            Some(1)
+        );
     }
 }

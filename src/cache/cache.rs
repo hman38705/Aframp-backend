@@ -61,20 +61,36 @@ pub trait Cache<T: Serialize + DeserializeOwned + Send + Sync + 'static> {
 #[derive(Debug, Clone)]
 pub struct RedisCache {
     pub pool: RedisPool,
+    /// Number of `get_connection` calls currently waiting on the pool
+    /// (i.e. blocked because all connections are checked out). Sampled by
+    /// `CacheStatsWorker` into the `aframp_redis_pool_pending` gauge.
+    pending: std::sync::Arc<std::sync::atomic::AtomicI64>,
 }
 
 impl RedisCache {
     /// Create a new Redis cache instance
     pub fn new(pool: RedisPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            pending: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        }
     }
 
     /// Get a connection from the pool with error handling
     pub async fn get_connection(&self) -> CacheResult<RedisConnection<'_>> {
-        self.pool.get().await.map_err(|e| {
+        self.pending.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let result = self.pool.get().await.map_err(|e| {
             warn!("Failed to get Redis connection: {}", e);
             e.into()
-        })
+        });
+        self.pending.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        result
+    }
+
+    /// Current number of in-flight `get_connection` acquisitions (a proxy
+    /// for requests waiting on the pool).
+    pub fn pending_acquisitions(&self) -> i64 {
+        self.pending.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 

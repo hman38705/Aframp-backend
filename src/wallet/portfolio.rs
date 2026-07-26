@@ -1,4 +1,4 @@
-// REMOVED: use crate::chains::stellar::client::StellarClient;
+use crate::chains::stellar::client::StellarClient;
 use crate::wallet::repository::{InsertPortfolioSnapshot, PortfolioRepository};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
