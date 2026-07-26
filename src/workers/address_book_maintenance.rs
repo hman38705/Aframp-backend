@@ -3,6 +3,7 @@ use crate::wallet::address_book::{
     VerificationStatus,
 };
 use sqlx::PgPool;
+use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -28,13 +29,20 @@ impl AddressBookMaintenanceWorker {
         let repository = Arc::new(AddressBookRepository::new(pool.clone()));
         let stellar_verifier = Arc::new(StellarAddressVerifier::new(horizon_url, cngn_issuer));
 
+        // Allow operators to tune via ADDRESS_BOOK_REVERIFY_BATCH_SIZE (default: 100).
+        // Lower values reduce per-cycle Horizon load; raise for faster catch-up.
+        let re_verification_batch_size: usize = env::var("ADDRESS_BOOK_REVERIFY_BATCH_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(100);
+
         Self {
             pool,
             repository,
             stellar_verifier,
             stale_threshold_hours,
             stale_alert_threshold,
-            re_verification_batch_size: 100,
+            re_verification_batch_size,
         }
     }
 
