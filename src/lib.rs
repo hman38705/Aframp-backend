@@ -9,6 +9,9 @@ use soroban_sdk::{
 
 // ── Core infrastructure ────────────────────────────────────────────────────────
 #[cfg(feature = "database")]
+pub mod chains;
+
+#[cfg(feature = "database")]
 pub mod database;
 
 #[cfg(feature = "database")]
@@ -107,6 +110,9 @@ pub mod compliance_effectiveness;
 
 #[cfg(feature = "database")]
 pub mod risk;
+
+#[cfg(feature = "database")]
+pub mod travel_rule;
 
 // ── API layer ─────────────────────────────────────────────────────────────────
 #[cfg(feature = "database")]

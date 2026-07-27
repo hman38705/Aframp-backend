@@ -26,6 +26,16 @@ pub struct StellarBalance {
     pub asset_code: Option<String>,
     #[serde(default)]
     pub asset_issuer: Option<String>,
+    #[serde(default)]
+    pub limit: Option<String>,
+    #[serde(default = "default_authorized", rename = "is_authorized")]
+    pub is_authorized: bool,
+}
+
+/// Horizon omits `is_authorized` entirely for the native XLM balance line
+/// (only relevant for trustlines); treat a missing field as authorized.
+fn default_authorized() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize)]

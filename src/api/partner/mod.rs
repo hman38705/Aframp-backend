@@ -280,7 +280,7 @@ pub async fn initiate_transfer(
         Ok(t) => {
             // Travel Rule gate — applies to cross-border transfers and high-risk corridors
             if let Some(tr_svc) = &state.travel_rule_service {
-// REMOVED:                 use crate::travel_rule::models::{
+                use crate::travel_rule::models::{
                     InitiateTravelRuleRequest, Ivms101NaturalPerson, Ivms101Person,
                 };
                 use rust_decimal::Decimal;
@@ -334,11 +334,20 @@ pub async fn initiate_transfer(
                         destination_address: None,
                     };
                     if let Err(e) = tr_svc.initiate_outbound(tr_req).await {
-                        tracing::warn!(
+                        tracing::error!(
                             transfer_id = %t.id,
                             error = %e,
                             high_risk,
-                            "Travel Rule initiation failed for partner transfer — proceeding with monitoring"
+                            "Travel Rule compliance check failed for partner transfer — blocking"
+                        );
+                        let _ = state
+                            .repo
+                            .update_transfer_status(t.id, "failed", None, Some(&e.to_string()))
+                            .await;
+                        return err_resp(
+                            StatusCode::UNPROCESSABLE_ENTITY,
+                            "TRAVEL_RULE_REQUIRED",
+                            "This transfer requires originator and beneficiary information to be verified before it can proceed",
                         );
                     }
                 }

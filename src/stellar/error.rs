@@ -56,6 +56,9 @@ pub enum SubmissionError {
 
     #[error("Channel rotation error: {0}")]
     ChannelRotationError(String),
+
+    #[error("Submission queue saturated: waited {waited_ms}ms for a channel slot (timeout after {timeout_ms}ms)")]
+    QueueTimeout { waited_ms: u64, timeout_ms: u64 },
 }
 
 pub type SubmissionResult<T> = Result<T, SubmissionError>;

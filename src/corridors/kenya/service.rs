@@ -1,6 +1,5 @@
 //! Kenya corridor service — orchestrates the full NG→KE transfer flow.
 
-// REMOVED: use crate::compliance_registry::repository::ComplianceRegistryRepository;
 use crate::corridors::kenya::models::*;
 use crate::payments::provider::PaymentProvider;
 use crate::payments::providers::mpesa_kenya::{
@@ -55,7 +54,6 @@ pub enum KenyaCorridorError {
 
 pub struct KenyaCorridorService {
     pool: PgPool,
-    compliance_repo: Arc<ComplianceRegistryRepository>,
     exchange_rate_svc: Arc<ExchangeRateService>,
     fee_svc: Arc<FeeCalculationService>,
     mpesa_config: MpesaKenyaConfig,
@@ -66,7 +64,6 @@ pub struct KenyaCorridorService {
 impl KenyaCorridorService {
     pub fn new(
         pool: PgPool,
-        compliance_repo: Arc<ComplianceRegistryRepository>,
         exchange_rate_svc: Arc<ExchangeRateService>,
         fee_svc: Arc<FeeCalculationService>,
         mpesa_config: MpesaKenyaConfig,
@@ -74,7 +71,6 @@ impl KenyaCorridorService {
     ) -> Self {
         Self {
             pool,
-            compliance_repo,
             exchange_rate_svc,
             fee_svc,
             mpesa_config,

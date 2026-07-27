@@ -1,6 +1,5 @@
 //! Database repository for the corridor router.
 
-// REMOVED: use crate::compliance_registry::models::CorridorStatus;
 use crate::corridors::router::models::*;
 use crate::database::error::DatabaseError;
 use chrono::Utc;
