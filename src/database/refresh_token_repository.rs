@@ -203,6 +203,53 @@ impl RefreshTokenRepository {
         Ok(result.rows_affected() > 0)
     }
 
+    /// Atomically claim a refresh token for rotation and return whether the
+    /// caller won the race.
+    ///
+    /// `mark_as_used` alone is safe against concurrent UPDATEs on the same
+    /// row, but callers that first check token state (e.g. `is_used`) via a
+    /// separate, unlocked SELECT and only call `mark_as_used` afterwards
+    /// leave a window where two concurrent requests can both pass the
+    /// initial check before either claims the row. This method takes an
+    /// explicit row lock (`SELECT ... FOR UPDATE`) and performs the
+    /// active -> used transition in the same transaction, so only one of two
+    /// concurrent callers for the same token_id can ever return `true`.
+    pub async fn claim_token_for_rotation(&self, token_id: &str) -> DbResult<bool> {
+        let now = Utc::now();
+        let mut tx = self.db.begin().await.map_err(DatabaseError::from_sqlx)?;
+
+        let locked_status: Option<(String,)> = sqlx::query_as(
+            "SELECT status FROM refresh_tokens WHERE token_id = $1 FOR UPDATE",
+        )
+        .bind(token_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(DatabaseError::from_sqlx)?;
+
+        let claimed = match locked_status {
+            Some((status,)) if status == "active" => {
+                sqlx::query(
+                    r#"
+                    UPDATE refresh_tokens
+                    SET status = 'used', last_used_at = $1, updated_at = $2
+                    WHERE token_id = $3
+                    "#,
+                )
+                .bind(now)
+                .bind(now)
+                .bind(token_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(DatabaseError::from_sqlx)?;
+                true
+            }
+            _ => false,
+        };
+
+        tx.commit().await.map_err(DatabaseError::from_sqlx)?;
+        Ok(claimed)
+    }
+
     /// Set replacement token for rotation
     pub async fn set_replacement(
         &self,
