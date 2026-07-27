@@ -30,6 +30,7 @@ pub mod repository;
 pub mod saga;
 pub mod shard;
 pub mod shard_manager;
+pub mod shard_pool_leak_monitor;
 pub mod shard_migration;
 pub mod token_registry_repository;
 pub mod transaction;
