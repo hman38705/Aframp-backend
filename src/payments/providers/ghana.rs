@@ -467,12 +467,20 @@ impl PaymentProvider for GhanaProvider {
         use hmac::{Hmac, Mac};
         use sha2::Sha256;
 
+        // Fail closed: without a configured secret we cannot verify the
+        // signature, so the webhook must be rejected. Previously this
+        // returned valid: true, which let anyone POST a fake success
+        // webhook (e.g. to trigger fraudulent fund releases) whenever the
+        // secret happened to be unset.
         let secret = match &self.config.webhook_secret {
             Some(s) => s.clone(),
             None => {
                 return Ok(WebhookVerificationResult {
-                    valid: true,
-                    reason: Some("No webhook secret configured — skipping verification".to_string()),
+                    valid: false,
+                    reason: Some(
+                        "No webhook secret configured — rejecting unverifiable webhook"
+                            .to_string(),
+                    ),
                 })
             }
         };
