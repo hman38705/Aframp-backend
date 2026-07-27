@@ -509,6 +509,81 @@ mod tests {
         }
     }
 
+    // Property-based tests (issue #797): fee calculation must never return a
+    // negative fee, and — for the realistic tier ranges seen in
+    // `fee_structures` (<=20% + a small flat component) — must never exceed
+    // the amount being charged.
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn cents_to_decimal(cents: i64) -> BigDecimal {
+            BigDecimal::from(cents) / BigDecimal::from(100)
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(10_000))]
+
+            #[test]
+            fn provider_and_platform_fees_are_bounded(
+                amount_cents in 1_000_00i64..1_000_000_000i64,
+                provider_percent_bp in 0i64..2_000i64,
+                provider_flat_cents in 0i64..20_000i64,
+                platform_percent_bp in 0i64..2_000i64,
+            ) {
+                let amount = cents_to_decimal(amount_cents);
+                let config = test_fee_config(
+                    None, None, None, None, None, None,
+                );
+                let config = FeeConfig {
+                    provider_fee_percent: Some(cents_to_decimal(provider_percent_bp)),
+                    provider_fee_flat: Some(cents_to_decimal(provider_flat_cents)),
+                    provider_fee_cap: None,
+                    platform_fee_percent: Some(cents_to_decimal(platform_percent_bp)),
+                    ..config
+                };
+                let service = test_service();
+
+                let provider_fee = service
+                    .calculate_provider_fee(&amount, &config, Some("flutterwave"), Some("card"))
+                    .unwrap();
+                let platform_fee = service.calculate_platform_fee(&amount, &config);
+
+                prop_assert!(provider_fee.calculated >= BigDecimal::from(0));
+                prop_assert!(platform_fee.calculated >= BigDecimal::from(0));
+
+                let total = &provider_fee.calculated + &platform_fee.calculated;
+                prop_assert!(total <= amount);
+            }
+
+            #[test]
+            fn provider_fee_never_exceeds_its_cap(
+                amount_cents in 1_000_00i64..1_000_000_000i64,
+                provider_percent_bp in 0i64..10_000i64,
+                provider_flat_cents in 0i64..1_000_000i64,
+                cap_cents in 0i64..500_000i64,
+            ) {
+                let amount = cents_to_decimal(amount_cents);
+                let cap = cents_to_decimal(cap_cents);
+                let base_config = test_fee_config(None, None, None, None, None, None);
+                let config = FeeConfig {
+                    provider_fee_percent: Some(cents_to_decimal(provider_percent_bp)),
+                    provider_fee_flat: Some(cents_to_decimal(provider_flat_cents)),
+                    provider_fee_cap: Some(cap.clone()),
+                    ..base_config
+                };
+                let service = test_service();
+
+                let provider_fee = service
+                    .calculate_provider_fee(&amount, &config, Some("flutterwave"), Some("card"))
+                    .unwrap();
+
+                prop_assert!(provider_fee.calculated <= cap);
+                prop_assert!(provider_fee.calculated >= BigDecimal::from(0));
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_amount_in_range() {
         let amount = BigDecimal::from_str("10000").unwrap();

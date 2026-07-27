@@ -651,4 +651,39 @@ mod tests {
             if from == "USD" && to == "cNGN"
         ));
     }
+
+    // Property-based test (issue #797): a round-trip NGN -> USD -> NGN
+    // conversion, using `compute_gross_amount` (the same pure function the
+    // service uses to apply a rate), must return to within 1 basis point
+    // (0.01%) of the original amount.
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn cents_to_decimal(cents: i64) -> BigDecimal {
+            BigDecimal::from(cents) / BigDecimal::from(100)
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(10_000))]
+
+            #[test]
+            fn ngn_usd_ngn_round_trip_within_one_basis_point(
+                ngn_amount_cents in 1_00i64..1_000_000_00i64,
+                usd_to_ngn_rate_cents in 50_00i64..5_000_00i64,
+            ) {
+                let ngn_amount = cents_to_decimal(ngn_amount_cents);
+                let usd_to_ngn_rate = cents_to_decimal(usd_to_ngn_rate_cents);
+                let ngn_to_usd_rate = BigDecimal::from(1) / usd_to_ngn_rate.clone();
+
+                let usd_amount = compute_gross_amount(&ngn_amount, &ngn_to_usd_rate);
+                let ngn_round_tripped = compute_gross_amount(&usd_amount, &usd_to_ngn_rate);
+
+                let deviation = (&ngn_round_tripped - &ngn_amount).abs();
+                let one_basis_point = &ngn_amount * &BigDecimal::from_str("0.0001").unwrap();
+
+                prop_assert!(deviation <= one_basis_point);
+            }
+        }
+    }
 }

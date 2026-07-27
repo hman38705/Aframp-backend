@@ -320,6 +320,11 @@ name = "kyc_monthly_volume_reset_integration"
 path = "tests/kyc_monthly_volume_reset_integration.rs"
 required-features = ["database"]
 
+[[test]]
+name = "kyc_limits_proptest"
+path = "tests/kyc_limits_proptest.rs"
+required-features = ["database"]
+
 # ---------------------------------------------------------------------------
 # Examples
 # ---------------------------------------------------------------------------
