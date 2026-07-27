@@ -1,6 +1,9 @@
 name: Load Tests
 
 on:
+  schedule:
+    # Run sustained load test nightly against staging to catch performance regressions
+    - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
       scenario:
