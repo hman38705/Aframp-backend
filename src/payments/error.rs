@@ -66,24 +66,63 @@ impl PaymentError {
     }
 
     pub fn user_message(&self) -> String {
+        self.user_message_localized(crate::payments::error_mapping::Locale::En)
+    }
+
+    /// Localized, user-facing message. Never surfaces raw provider text —
+    /// when a `provider_code` is known and recognized (see
+    /// [`crate::payments::error_mapping::PaymentProviderErrorMapping`]) an
+    /// actionable, provider-specific message is used; otherwise a generic
+    /// fallback for the error category is returned.
+    pub fn user_message_localized(
+        &self,
+        locale: crate::payments::error_mapping::Locale,
+    ) -> String {
+        use crate::payments::error_mapping::{Locale, PaymentProviderErrorMapping};
+
+        let code_message = |provider_code: &Option<String>| {
+            provider_code
+                .as_deref()
+                .and_then(|code| PaymentProviderErrorMapping::friendly_text_for_code(code, locale))
+        };
+
         match self {
             PaymentError::ValidationError { message, .. } => message.clone(),
-            PaymentError::InsufficientFundsError { .. } => {
-                "Insufficient funds to complete payment".to_string()
+            PaymentError::InsufficientFundsError { .. } => match locale {
+                Locale::En => "Insufficient funds to complete payment".to_string(),
+                Locale::Fr => "Fonds insuffisants pour effectuer ce paiement".to_string(),
+            },
+            PaymentError::PaymentDeclinedError { provider_code, .. } => {
+                code_message(provider_code).unwrap_or_else(|| match locale {
+                    Locale::En => "Payment was declined by the provider".to_string(),
+                    Locale::Fr => "Le paiement a été refusé par le fournisseur".to_string(),
+                })
             }
-            PaymentError::PaymentDeclinedError { .. } => {
-                "Payment was declined by the provider".to_string()
+            PaymentError::NetworkError { .. } => match locale {
+                Locale::En => "Payment provider is temporarily unavailable".to_string(),
+                Locale::Fr => {
+                    "Le fournisseur de paiement est temporairement indisponible".to_string()
+                }
+            },
+            PaymentError::RateLimitError { .. } => match locale {
+                Locale::En => {
+                    "Too many requests to payment provider. Please retry shortly".to_string()
+                }
+                Locale::Fr => {
+                    "Trop de requêtes envoyées au fournisseur de paiement. Veuillez réessayer sous peu"
+                        .to_string()
+                }
+            },
+            PaymentError::WebhookVerificationError { .. } => match locale {
+                Locale::En => "Invalid webhook signature".to_string(),
+                Locale::Fr => "Signature de webhook invalide".to_string(),
+            },
+            PaymentError::ProviderError { provider_code, .. } => {
+                code_message(provider_code).unwrap_or_else(|| match locale {
+                    Locale::En => "Payment provider returned an error".to_string(),
+                    Locale::Fr => "Le fournisseur de paiement a renvoyé une erreur".to_string(),
+                })
             }
-            PaymentError::NetworkError { .. } => {
-                "Payment provider is temporarily unavailable".to_string()
-            }
-            PaymentError::RateLimitError { .. } => {
-                "Too many requests to payment provider. Please retry shortly".to_string()
-            }
-            PaymentError::WebhookVerificationError { .. } => {
-                "Invalid webhook signature".to_string()
-            }
-            PaymentError::ProviderError { .. } => "Payment provider returned an error".to_string(),
         }
     }
 }

@@ -31,6 +31,9 @@ spec:
         prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: aframp-api
+      # Must exceed the app's SHUTDOWN_DRAIN_TIMEOUT (30s, see src/main.rs) plus
+      # the preStop sleep below, so Kubernetes never SIGKILLs mid-drain.
+      terminationGracePeriodSeconds: 60
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -109,7 +112,14 @@ spec:
           periodSeconds: 5
           timeoutSeconds: 3
           failureThreshold: 2
-        
+
+        lifecycle:
+          preStop:
+            exec:
+              # Give the load balancer / kube-proxy time to remove this pod's
+              # endpoint before the app starts refusing new connections.
+              command: ["sh", "-c", "sleep 5"]
+
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
@@ -118,7 +128,7 @@ spec:
           capabilities:
             drop:
             - ALL
-        
+
         volumeMounts:
         - name: tmp
           mountPath: /tmp

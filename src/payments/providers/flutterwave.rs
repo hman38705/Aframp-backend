@@ -1,4 +1,5 @@
 use crate::payments::error::{PaymentError, PaymentResult};
+use crate::payments::error_mapping::PaymentProviderErrorMapping;
 use crate::payments::provider::PaymentProvider;
 use crate::payments::types::{
     Money, PaymentMethod, PaymentRequest, PaymentResponse, PaymentState, ProviderName,
@@ -86,41 +87,7 @@ impl FlutterwaveProvider {
     }
 
     fn map_message_error(message: String) -> PaymentError {
-        let lowered = message.to_lowercase();
-        if lowered.contains("insufficient") || lowered.contains("low balance") {
-            return PaymentError::InsufficientFundsError { message };
-        }
-        if lowered.contains("declined")
-            || lowered.contains("do not honor")
-            || lowered.contains("expired card")
-        {
-            return PaymentError::PaymentDeclinedError {
-                message,
-                provider_code: None,
-            };
-        }
-        if lowered.contains("too many requests") || lowered.contains("rate limit") {
-            return PaymentError::RateLimitError {
-                message,
-                retry_after_seconds: None,
-            };
-        }
-        if lowered.contains("invalid")
-            || lowered.contains("missing")
-            || lowered.contains("not found")
-            || lowered.contains("unsupported")
-        {
-            return PaymentError::ValidationError {
-                message,
-                field: None,
-            };
-        }
-        PaymentError::ProviderError {
-            provider: "flutterwave".to_string(),
-            message,
-            provider_code: None,
-            retryable: false,
-        }
+        PaymentProviderErrorMapping::classify("flutterwave", None, &message)
     }
 }
 

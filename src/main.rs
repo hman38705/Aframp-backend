@@ -119,8 +119,26 @@ async fn shutdown_signal() {
     info!("Shutdown signal received, starting graceful shutdown");
 }
 
-async fn shutdown_signal_with_notify(shutdown_tx: watch::Sender<bool>) {
+/// Max time to wait for in-flight requests to finish after a shutdown signal
+/// is received before forcibly tearing the server down. Keep in sync with
+/// `k8s/production/deployment.yaml`'s `terminationGracePeriodSeconds`, which
+/// must be comfortably larger than this to leave room for the pre-stop hook.
+const SHUTDOWN_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+async fn shutdown_signal_with_notify(
+    shutdown_tx: watch::Sender<bool>,
+    shutting_down: Arc<std::sync::atomic::AtomicBool>,
+    drain_started: Arc<tokio::sync::Notify>,
+) {
     shutdown_signal().await;
+    // Flip readiness first so the readiness probe fails fast and the load
+    // balancer / k8s stop routing new traffic to this pod while we drain.
+    shutting_down.store(true, std::sync::atomic::Ordering::SeqCst);
+    drain_started.notify_one();
+    info!(
+        drain_timeout_secs = SHUTDOWN_DRAIN_TIMEOUT.as_secs(),
+        "Marked service not-ready; draining in-flight requests"
+    );
     let _ = shutdown_tx.send(true);
 }
 
@@ -551,6 +569,8 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let (worker_shutdown_tx, worker_shutdown_rx) = watch::channel(false);
+    let shutting_down = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let drain_started = Arc::new(tokio::sync::Notify::new());
 
     let mint_audit_verifier_enabled = std::env::var("MINT_AUDIT_VERIFICATION_ENABLED")
         .unwrap_or_else(|_| "true".to_string())
@@ -2412,6 +2432,7 @@ async fn main() -> anyhow::Result<()> {
             health_checker,
             warming_state: Some(warming_state),
             ha_pool: None, // populated below if DB sharding is enabled
+            shutting_down: shutting_down.clone(),
         });
 
     // Apply middleware conditionally based on available services
@@ -2685,10 +2706,44 @@ async fn main() -> anyhow::Result<()> {
     );
     info!("✅ Server is ready to accept connections");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal_with_notify(worker_shutdown_tx.clone()))
-        .await
-        .unwrap();
+    let worker_shutdown_tx_for_serve = worker_shutdown_tx.clone();
+    let shutting_down_for_serve = shutting_down.clone();
+    let drain_started_for_serve = drain_started.clone();
+    let server_task = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal_with_notify(
+                worker_shutdown_tx_for_serve,
+                shutting_down_for_serve,
+                drain_started_for_serve,
+            ))
+            .await
+    });
+
+    // Bound the drain window: if in-flight requests haven't finished within
+    // SHUTDOWN_DRAIN_TIMEOUT of the shutdown signal, abort the server rather
+    // than hang past the pod's terminationGracePeriodSeconds.
+    let watchdog_abort = server_task.abort_handle();
+    let watchdog_notify = drain_started.clone();
+    tokio::spawn(async move {
+        watchdog_notify.notified().await;
+        tokio::time::sleep(SHUTDOWN_DRAIN_TIMEOUT).await;
+        if !watchdog_abort.is_finished() {
+            warn!(
+                drain_timeout_secs = SHUTDOWN_DRAIN_TIMEOUT.as_secs(),
+                "Drain window exceeded; forcing server shutdown"
+            );
+            watchdog_abort.abort();
+        }
+    });
+
+    match server_task.await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => error!(error = %e, "Server exited with error"),
+        Err(e) if e.is_cancelled() => {
+            warn!("Server task aborted after exceeding the drain window")
+        }
+        Err(e) => error!(error = %e, "Server task panicked"),
+    }
 
     let _ = worker_shutdown_tx.send(true);
     if let Some(handle) = monitor_handle {
@@ -2725,6 +2780,10 @@ struct AppState {
     health_checker: HealthChecker,
     warming_state: Option<WarmingState>,
     ha_pool: Option<std::sync::Arc<database::ha_pool::HaPoolManager>>,
+    /// Flipped to `true` once a shutdown signal is received, so the
+    /// readiness probe can fail fast and stop new traffic from being routed
+    /// to this pod while in-flight requests drain.
+    shutting_down: Arc<std::sync::atomic::AtomicBool>,
 }
 
 // Handlers
@@ -2757,6 +2816,13 @@ async fn readiness(
     axum::extract::State(state): axum::extract::State<AppState>,
 ) -> Result<Json<HealthStatus>, (axum::http::StatusCode, String)> {
     info!("🔍 Readiness probe requested");
+    if state.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+        warn!("❌ Readiness check failed - service is draining for shutdown");
+        return Err((
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "Service is shutting down".to_string(),
+        ));
+    }
     let result = health(axum::extract::State(state)).await;
     if result.is_ok() {
         info!("✅ Readiness check passed");
