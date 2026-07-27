@@ -85,6 +85,12 @@ pub mod recurring;
 #[cfg(feature = "database")]
 pub mod stellar;
 
+// Exposes chains::stellar::xdr_parser to benches/xdr_parser.rs, which links
+// against this library crate (main.rs's own `mod chains;` only reaches the
+// binary target and isn't visible to bench/test crates).
+#[cfg(feature = "database")]
+pub mod chains;
+
 // ── Wallet ─────────────────────────────────────────────────────────────────────
 #[cfg(feature = "database")]
 pub mod wallet;

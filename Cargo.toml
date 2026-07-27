@@ -334,6 +334,15 @@ path = "examples/stellar_demo.rs"
 required-features = ["database"]
 
 # ---------------------------------------------------------------------------
+# Benchmarks
+# ---------------------------------------------------------------------------
+[[bench]]
+name = "xdr_parser"
+path = "benches/xdr_parser.rs"
+harness = false
+required-features = ["database"]
+
+# ---------------------------------------------------------------------------
 # Dev dependencies
 # ---------------------------------------------------------------------------
 [dev-dependencies]
@@ -349,3 +358,4 @@ bigdecimal  = "0.4"
 proptest    = "1.4"
 base64      = "0.22.1"
 uuid        = { version = "1.6", features = ["v4"] }
+criterion   = "0.5"
