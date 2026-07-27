@@ -40,4 +40,12 @@ pub mod scope_middleware;
 pub mod cors;
 pub mod security;
 #[cfg(feature = "database")]
+pub mod auth_rate_limit;
+#[cfg(feature = "database")]
 pub mod paystack_ip_allowlist;
+
+#[cfg(feature = "database")]
+pub use auth_rate_limit::{
+    auth_rate_limit_middleware, record_auth_failure, record_auth_success, AuthRateLimitConfig,
+    AuthRateLimitState,
+};

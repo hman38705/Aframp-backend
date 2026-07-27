@@ -320,6 +320,16 @@ name = "kyc_monthly_volume_reset_integration"
 path = "tests/kyc_monthly_volume_reset_integration.rs"
 required-features = ["database"]
 
+[[test]]
+name = "auth_brute_force_test"
+path = "tests/auth_brute_force_test.rs"
+required-features = ["cache"]
+
+[[test]]
+name = "replay_prevention_providers_test"
+path = "tests/replay_prevention_providers_test.rs"
+required-features = ["cache"]
+
 # ---------------------------------------------------------------------------
 # Examples
 # ---------------------------------------------------------------------------
