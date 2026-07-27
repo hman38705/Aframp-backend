@@ -267,26 +267,24 @@ impl KycLimitsEnforcer {
         Ok(count as usize)
     }
 
-    /// Reset monthly volume counters (called by scheduled job)
+    /// Reset monthly volume counters left over from a prior month (called by
+    /// scheduled job). This is a proactive convenience, not a correctness
+    /// requirement: `KycRepository::upsert_monthly_volume` already rolls a
+    /// stale counter over atomically the next time a transaction is
+    /// recorded, guarded by PostgreSQL's row-level locking rather than an
+    /// application-level lock. This job just makes the rollover visible to
+    /// reads immediately after the month boundary instead of waiting for a
+    /// consumer's next transaction, and is idempotent -- running it twice in
+    /// the same month is a no-op the second time.
     pub async fn reset_monthly_counters(&self) -> Result<usize, KycLimitsError> {
         info!("Resetting monthly volume counters");
 
-        let today = Utc::now().date_naive();
+        let count = self
+            .repository
+            .reset_stale_monthly_counters()
+            .await
+            .map_err(|e| KycLimitsError::DatabaseError(e.to_string()))?;
 
-        let result = sqlx::query!(
-            r#"
-            UPDATE kyc_volume_trackers 
-            SET monthly_volume = 0, last_updated = $1
-            WHERE date = $2 AND monthly_volume > 0
-            "#,
-            Utc::now(),
-            today
-        )
-        .execute(&self.repository.pool)
-        .await
-        .map_err(|e| KycLimitsError::DatabaseError(e.to_string()))?;
-
-        let count = result.rows_affected();
         info!("Reset monthly counters for {} consumers", count);
 
         // Clear all limits cache
@@ -430,27 +428,19 @@ impl KycLimitsEnforcer {
             }
         }
 
-        // Fallback to database
-        let today = Utc::now().date_naive();
-
-        let result = sqlx::query!(
-            r#"
-            SELECT COALESCE(daily_volume, '0'::numeric) as daily_volume,
-                   COALESCE(monthly_volume, '0'::numeric) as monthly_volume
-            FROM kyc_volume_trackers
-            WHERE consumer_id = $1 AND date = $2
-            "#,
-            consumer_id,
-            today
-        )
-        .fetch_optional(&self.repository.pool)
-        .await
-        .map_err(|e| KycLimitsError::DatabaseError(e.to_string()))?;
-
-        let (daily, monthly) = match result {
-            Some(record) => (record.daily_volume, record.monthly_volume),
-            None => (BigDecimal::from(0), BigDecimal::from(0)),
-        };
+        // Fallback to database. Daily and monthly volumes live in separate
+        // tables (see KycMonthlyVolumeTracker) since a day's row and a
+        // month's row don't share the same reset cadence.
+        let daily = self
+            .repository
+            .get_daily_volume_used(consumer_id)
+            .await
+            .map_err(|e| KycLimitsError::DatabaseError(e.to_string()))?;
+        let monthly = self
+            .repository
+            .get_monthly_volume_used(consumer_id)
+            .await
+            .map_err(|e| KycLimitsError::DatabaseError(e.to_string()))?;
 
         // Update cache
         let volumes_data = serde_json::json!({

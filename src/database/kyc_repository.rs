@@ -247,6 +247,68 @@ pub struct KycVolumeTracker {
     pub last_updated: DateTime<Utc>,
 }
 
+/// Running monthly volume for a consumer, tracked as a single row per
+/// consumer (unlike `kyc_volume_trackers`, which gets a new row every day).
+/// `month_start` is the calendar month this row's `monthly_volume` belongs
+/// to; a row whose `month_start` is before the current month is stale and
+/// is treated as (and lazily reset to) zero. See `upsert_monthly_volume`
+/// and `reset_stale_monthly_counters`.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct KycMonthlyVolumeTracker {
+    pub consumer_id: Uuid,
+    pub month_start: chrono::NaiveDate,
+    pub monthly_volume: BigDecimal,
+    pub last_reset_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Well-known PostgreSQL advisory lock key guarding the monthly volume
+/// reset job, so overlapping runs (e.g. two app instances on the same
+/// schedule) don't race each other. Scoped with `pg_try_advisory_xact_lock`,
+/// which auto-releases on commit/rollback.
+const KYC_MONTHLY_VOLUME_RESET_LOCK_KEY: i64 = 0x4b59435f4d5652; // "KYC_MVR" in hex
+
+/// Shared by `KycRepository::upsert_monthly_volume` (standalone) and
+/// `update_volume_tracker` (inside its transaction). A single INSERT ...
+/// ON CONFLICT DO UPDATE: on conflict, PostgreSQL re-evaluates the CASE
+/// against the row as it exists once the row lock is acquired, so this is
+/// atomic even when two callers for the same consumer land on either side
+/// of a month boundary at the same instant.
+async fn upsert_monthly_volume_with<'e, E>(
+    executor: E,
+    consumer_id: Uuid,
+    amount: BigDecimal,
+) -> Result<KycMonthlyVolumeTracker, sqlx::Error>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    sqlx::query_as::<_, KycMonthlyVolumeTracker>(
+        r#"
+        INSERT INTO kyc_monthly_volume_trackers (
+            consumer_id, month_start, monthly_volume, last_reset_at, updated_at
+        ) VALUES ($1, date_trunc('month', now())::date, $2, now(), now())
+        ON CONFLICT (consumer_id) DO UPDATE SET
+            monthly_volume = CASE
+                WHEN kyc_monthly_volume_trackers.month_start < date_trunc('month', now())::date
+                THEN EXCLUDED.monthly_volume
+                ELSE kyc_monthly_volume_trackers.monthly_volume + EXCLUDED.monthly_volume
+            END,
+            month_start = date_trunc('month', now())::date,
+            last_reset_at = CASE
+                WHEN kyc_monthly_volume_trackers.month_start < date_trunc('month', now())::date
+                THEN EXCLUDED.last_reset_at
+                ELSE kyc_monthly_volume_trackers.last_reset_at
+            END,
+            updated_at = EXCLUDED.updated_at
+        RETURNING consumer_id, month_start, monthly_volume, last_reset_at, updated_at
+        "#,
+    )
+    .bind(consumer_id)
+    .bind(amount)
+    .fetch_one(executor)
+    .await
+}
+
 // Database repository for KYC operations
 pub struct KycRepository {
     pool: sqlx::PgPool,
@@ -273,6 +335,7 @@ impl KycRepository {
                 enhanced_due_diligence_active, effective_tier
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING *
+            "#,
         )
         .bind(id)
         .bind(consumer_id)
@@ -294,8 +357,9 @@ impl KycRepository {
             r#"
             SELECT * FROM kyc_records 
             WHERE consumer_id = $1 
-            ORDER BY created_at DESC 
+            ORDER BY created_at DESC
             LIMIT 1
+            "#,
         )
         .bind(consumer_id)
         .fetch_optional(&self.pool)
@@ -318,6 +382,7 @@ impl KycRepository {
                 decision_timestamp = $4, updated_at = $5
             WHERE id = $6
             RETURNING *
+            "#,
         )
         .bind(status)
         .bind(decision_reason)
@@ -342,6 +407,7 @@ impl KycRepository {
             SET tier = $1, effective_tier = $1, updated_at = $2
             WHERE id = $3
             RETURNING *
+            "#,
         )
         .bind(tier)
         .bind(now)
@@ -373,6 +439,7 @@ impl KycRepository {
                 selfie_image_reference, created_at, updated_at
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING *
+            "#,
         )
         .bind(id)
         .bind(kyc_record_id)
@@ -396,8 +463,9 @@ impl KycRepository {
         sqlx::query_as::<_, KycDocument>(
             r#"
             SELECT * FROM kyc_documents 
-            WHERE kyc_record_id = $1 
+            WHERE kyc_record_id = $1
             ORDER BY created_at ASC
+            "#,
         )
         .bind(kyc_record_id)
         .fetch_all(&self.pool)
@@ -424,6 +492,7 @@ impl KycRepository {
                 provider_response, metadata, timestamp
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING *
+            "#,
         )
         .bind(id)
         .bind(consumer_id)
@@ -448,8 +517,9 @@ impl KycRepository {
             r#"
             SELECT * FROM kyc_events 
             WHERE consumer_id = $1 
-            ORDER BY timestamp DESC 
+            ORDER BY timestamp DESC
             LIMIT $2
+            "#,
         )
         .bind(consumer_id)
         .bind(limit)
@@ -525,15 +595,17 @@ impl KycRepository {
         let now = Utc::now();
         let today = now.date_naive();
 
-        sqlx::query_as!(
+        let mut tx = self.pool.begin().await?;
+
+        let updated_tracker = sqlx::query_as!(
             KycVolumeTracker,
             r#"
             INSERT INTO kyc_volume_trackers (
-                consumer_id, date, daily_volume, monthly_volume, 
+                consumer_id, date, daily_volume, monthly_volume,
                 transaction_count, last_updated
             ) VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (consumer_id, date) 
-            DO UPDATE SET 
+            ON CONFLICT (consumer_id, date)
+            DO UPDATE SET
                 daily_volume = kyc_volume_trackers.daily_volume + EXCLUDED.daily_volume,
                 monthly_volume = kyc_volume_trackers.monthly_volume + EXCLUDED.monthly_volume,
                 transaction_count = kyc_volume_trackers.transaction_count + 1,
@@ -547,8 +619,117 @@ impl KycRepository {
             1i32,
             now
         )
-        .fetch_one(&self.pool)
-        .await
+        .fetch_one(&mut *tx)
+        .await?;
+
+        upsert_monthly_volume_with(&mut *tx, consumer_id, transaction_amount).await?;
+
+        tx.commit().await?;
+
+        Ok(updated_tracker)
+    }
+
+    /// Atomically record `amount` against the consumer's running monthly
+    /// total, transparently rolling the counter over if the stored row
+    /// belongs to a prior month. This is a single INSERT ... ON CONFLICT
+    /// statement, so PostgreSQL's row-level locking serializes concurrent
+    /// callers for the same consumer -- a transaction landing exactly on
+    /// the month boundary either commits before or after a concurrent
+    /// reset/increment, never interleaved with it, so volume can't be
+    /// double-counted or silently dropped.
+    pub async fn upsert_monthly_volume(
+        &self,
+        consumer_id: Uuid,
+        amount: BigDecimal,
+    ) -> Result<KycMonthlyVolumeTracker, sqlx::Error> {
+        upsert_monthly_volume_with(&self.pool, consumer_id, amount).await
+    }
+
+    /// Idempotent batch reset of any monthly volume rows left over from a
+    /// prior month. Not required for correctness (`upsert_monthly_volume`
+    /// self-heals on the next write), but lets reads immediately after a
+    /// month rollover see zero without waiting for that consumer's next
+    /// transaction. Guarded by a PostgreSQL advisory lock so overlapping
+    /// runs (e.g. two app instances on the same schedule) don't do
+    /// redundant work; the UPDATE's WHERE clause re-checks `month_start`
+    /// after acquiring each row's lock, so running it twice in the same
+    /// month is a no-op the second time (0 rows affected).
+    pub async fn reset_stale_monthly_counters(&self) -> Result<u64, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+
+        let lock_acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock($1)")
+            .bind(KYC_MONTHLY_VOLUME_RESET_LOCK_KEY)
+            .fetch_one(&mut *tx)
+            .await?;
+
+        if !lock_acquired {
+            tx.rollback().await?;
+            return Ok(0);
+        }
+
+        let result = sqlx::query(
+            r#"
+            UPDATE kyc_monthly_volume_trackers
+            SET monthly_volume = 0,
+                month_start = date_trunc('month', now())::date,
+                last_reset_at = now(),
+                updated_at = now()
+            WHERE month_start < date_trunc('month', now())::date
+            "#,
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Current-month volume used, or zero if the consumer has no row yet
+    /// this month (including a stale row from a prior month that hasn't
+    /// been touched or reset yet).
+    pub async fn get_monthly_volume_used(&self, consumer_id: Uuid) -> Result<BigDecimal, sqlx::Error> {
+        use sqlx::Row;
+
+        let row = sqlx::query(
+            r#"
+            SELECT monthly_volume
+            FROM kyc_monthly_volume_trackers
+            WHERE consumer_id = $1 AND month_start = date_trunc('month', now())::date
+            "#,
+        )
+        .bind(consumer_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            Some(row) => row.try_get::<BigDecimal, _>("monthly_volume"),
+            None => Ok(BigDecimal::from(0)),
+        }
+    }
+
+    /// Today's daily volume used, or zero if the consumer has no row yet today.
+    pub async fn get_daily_volume_used(&self, consumer_id: Uuid) -> Result<BigDecimal, sqlx::Error> {
+        use sqlx::Row;
+
+        let today = Utc::now().date_naive();
+
+        let row = sqlx::query(
+            r#"
+            SELECT daily_volume
+            FROM kyc_volume_trackers
+            WHERE consumer_id = $1 AND date = $2
+            "#,
+        )
+        .bind(consumer_id)
+        .bind(today)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            Some(row) => row.try_get::<BigDecimal, _>("daily_volume"),
+            None => Ok(BigDecimal::from(0)),
+        }
     }
 
     pub async fn get_current_limits(
@@ -560,18 +741,20 @@ impl KycRepository {
 
         sqlx::query_as::<_, KycLimits>(
             r#"
-            SELECT 
+            SELECT
                 kr.tier as tier,
                 tdl.max_transaction_amount,
                 tdl.daily_volume_limit,
                 tdl.monthly_volume_limit,
                 COALESCE(vt.daily_volume, '0'::numeric) as daily_volume_used,
-                COALESCE(vt.monthly_volume, '0'::numeric) as monthly_volume_used,
+                COALESCE(mvt.monthly_volume, '0'::numeric) as monthly_volume_used,
                 COALESCE(vt.last_updated, $3) as last_daily_reset,
-                COALESCE(vt.last_updated, $3) as last_monthly_reset
+                COALESCE(mvt.last_reset_at, $3) as last_monthly_reset
             FROM kyc_records kr
             JOIN kyc_tier_definitions tdl ON kr.tier = tdl.tier
             LEFT JOIN kyc_volume_trackers vt ON kr.consumer_id = vt.consumer_id AND vt.date = $1
+            LEFT JOIN kyc_monthly_volume_trackers mvt ON kr.consumer_id = mvt.consumer_id
+                AND mvt.month_start = date_trunc('month', $3::timestamptz)::date
             WHERE kr.consumer_id = $2
             ORDER BY kr.created_at DESC
             LIMIT 1

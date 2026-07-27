@@ -315,6 +315,11 @@ name = "liquidity_ml_tests"
 path = "tests/liquidity_ml_tests.rs"
 required-features = ["database"]
 
+[[test]]
+name = "kyc_monthly_volume_reset_integration"
+path = "tests/kyc_monthly_volume_reset_integration.rs"
+required-features = ["database"]
+
 # ---------------------------------------------------------------------------
 # Examples
 # ---------------------------------------------------------------------------
