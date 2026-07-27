@@ -1,17 +1,26 @@
 {
   "dashboard": {
     "title": "Aframp Production Operations Dashboard",
-    "tags": ["aframp", "production", "operations"],
+    "tags": [
+      "aframp",
+      "production",
+      "operations"
+    ],
     "timezone": "UTC",
     "schemaVersion": 38,
-    "version": 1,
+    "version": 2,
     "refresh": "30s",
     "panels": [
       {
         "id": 1,
         "title": "Memory Usage Trend",
         "type": "graph",
-        "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+        "gridPos": {
+          "x": 0,
+          "y": 0,
+          "w": 12,
+          "h": 8
+        },
         "targets": [
           {
             "expr": "process_resident_memory_bytes{job=\"aframp-backend\"}",
@@ -30,15 +39,25 @@
           }
         ],
         "yaxes": [
-          {"format": "bytes", "label": "Memory"},
-          {"format": "short"}
+          {
+            "format": "bytes",
+            "label": "Memory"
+          },
+          {
+            "format": "short"
+          }
         ]
       },
       {
         "id": 2,
         "title": "Memory Allocation Rate",
         "type": "graph",
-        "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+        "gridPos": {
+          "x": 12,
+          "y": 0,
+          "w": 12,
+          "h": 8
+        },
         "targets": [
           {
             "expr": "rate(memory_allocations_total{job=\"aframp-backend\"}[5m])",
@@ -52,15 +71,25 @@
           }
         ],
         "yaxes": [
-          {"format": "ops", "label": "Operations/sec"},
-          {"format": "short"}
+          {
+            "format": "ops",
+            "label": "Operations/sec"
+          },
+          {
+            "format": "short"
+          }
         ]
       },
       {
         "id": 3,
         "title": "Database Partition Health",
         "type": "table",
-        "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8},
+        "gridPos": {
+          "x": 0,
+          "y": 8,
+          "w": 12,
+          "h": 8
+        },
         "targets": [
           {
             "expr": "pg_table_size_bytes{table=~\".*_snapshots_.*\"}",
@@ -73,7 +102,9 @@
           {
             "id": "organize",
             "options": {
-              "excludeByName": {"Time": true},
+              "excludeByName": {
+                "Time": true
+              },
               "indexByName": {},
               "renameByName": {
                 "table": "Partition",
@@ -87,7 +118,12 @@
         "id": 4,
         "title": "Autovacuum Activity",
         "type": "graph",
-        "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8},
+        "gridPos": {
+          "x": 12,
+          "y": 8,
+          "w": 12,
+          "h": 8
+        },
         "targets": [
           {
             "expr": "rate(pg_stat_user_tables_autovacuum_count[5m])",
@@ -101,15 +137,25 @@
           }
         ],
         "yaxes": [
-          {"format": "percentunit", "label": "Ratio / Rate"},
-          {"format": "short"}
+          {
+            "format": "percentunit",
+            "label": "Ratio / Rate"
+          },
+          {
+            "format": "short"
+          }
         ]
       },
       {
         "id": 5,
         "title": "Reconciliation Drift",
         "type": "graph",
-        "gridPos": {"x": 0, "y": 16, "w": 12, "h": 8},
+        "gridPos": {
+          "x": 0,
+          "y": 16,
+          "w": 12,
+          "h": 8
+        },
         "targets": [
           {
             "expr": "abs(reconciliation_balance_drift_stroops)",
@@ -123,16 +169,37 @@
           }
         ],
         "yaxes": [
-          {"format": "short", "label": "Stroops / %"},
-          {"format": "short"}
+          {
+            "format": "short",
+            "label": "Stroops / %"
+          },
+          {
+            "format": "short"
+          }
         ],
         "alert": {
           "conditions": [
             {
-              "evaluator": {"params": [50000000], "type": "gt"},
-              "operator": {"type": "and"},
-              "query": {"params": ["A", "5m", "now"]},
-              "reducer": {"params": [], "type": "avg"},
+              "evaluator": {
+                "params": [
+                  50000000
+                ],
+                "type": "gt"
+              },
+              "operator": {
+                "type": "and"
+              },
+              "query": {
+                "params": [
+                  "A",
+                  "5m",
+                  "now"
+                ]
+              },
+              "reducer": {
+                "params": [],
+                "type": "avg"
+              },
               "type": "query"
             }
           ],
@@ -145,7 +212,12 @@
         "id": 6,
         "title": "Circuit Breaker Status",
         "type": "stat",
-        "gridPos": {"x": 12, "y": 16, "w": 12, "h": 8},
+        "gridPos": {
+          "x": 12,
+          "y": 16,
+          "w": 12,
+          "h": 8
+        },
         "targets": [
           {
             "expr": "circuit_breaker_is_tripped",
@@ -158,7 +230,9 @@
           "colorMode": "background",
           "reduceOptions": {
             "values": false,
-            "calcs": ["lastNotNull"]
+            "calcs": [
+              "lastNotNull"
+            ]
           }
         },
         "fieldConfig": {
@@ -166,13 +240,27 @@
             "thresholds": {
               "mode": "absolute",
               "steps": [
-                {"value": 0, "color": "green"},
-                {"value": 1, "color": "red"}
+                {
+                  "value": 0,
+                  "color": "green"
+                },
+                {
+                  "value": 1,
+                  "color": "red"
+                }
               ]
             },
             "mappings": [
-              {"type": "value", "value": "0", "text": "OK"},
-              {"type": "value", "value": "1", "text": "TRIPPED"}
+              {
+                "type": "value",
+                "value": "0",
+                "text": "OK"
+              },
+              {
+                "type": "value",
+                "value": "1",
+                "text": "TRIPPED"
+              }
             ]
           }
         }
@@ -181,7 +269,12 @@
         "id": 7,
         "title": "Reconciliation Duration",
         "type": "graph",
-        "gridPos": {"x": 0, "y": 24, "w": 12, "h": 8},
+        "gridPos": {
+          "x": 0,
+          "y": 24,
+          "w": 12,
+          "h": 8
+        },
         "targets": [
           {
             "expr": "reconciliation_duration_seconds",
@@ -195,15 +288,26 @@
           }
         ],
         "yaxes": [
-          {"format": "s", "label": "Duration"},
-          {"format": "short", "label": "Count"}
+          {
+            "format": "s",
+            "label": "Duration"
+          },
+          {
+            "format": "short",
+            "label": "Count"
+          }
         ]
       },
       {
         "id": 8,
         "title": "Log Delivery Rate",
         "type": "graph",
-        "gridPos": {"x": 12, "y": 24, "w": 12, "h": 8},
+        "gridPos": {
+          "x": 12,
+          "y": 24,
+          "w": 12,
+          "h": 8
+        },
         "targets": [
           {
             "expr": "rate(vector_events_in_total[5m])",
@@ -222,15 +326,26 @@
           }
         ],
         "yaxes": [
-          {"format": "ops", "label": "Events/sec"},
-          {"format": "percentunit", "label": "Rate"}
+          {
+            "format": "ops",
+            "label": "Events/sec"
+          },
+          {
+            "format": "percentunit",
+            "label": "Rate"
+          }
         ]
       },
       {
         "id": 9,
         "title": "P99 Latency by Endpoint",
         "type": "graph",
-        "gridPos": {"x": 0, "y": 32, "w": 12, "h": 8},
+        "gridPos": {
+          "x": 0,
+          "y": 32,
+          "w": 12,
+          "h": 8
+        },
         "targets": [
           {
             "expr": "histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))",
@@ -249,15 +364,25 @@
           }
         ],
         "yaxes": [
-          {"format": "s", "label": "Latency"},
-          {"format": "short"}
+          {
+            "format": "s",
+            "label": "Latency"
+          },
+          {
+            "format": "short"
+          }
         ]
       },
       {
         "id": 10,
         "title": "Top Memory Allocation Hot-spots",
         "type": "table",
-        "gridPos": {"x": 12, "y": 32, "w": 12, "h": 8},
+        "gridPos": {
+          "x": 12,
+          "y": 32,
+          "w": 12,
+          "h": 8
+        },
         "targets": [
           {
             "expr": "topk(10, memory_hotspot_total_bytes)",
@@ -270,7 +395,9 @@
           {
             "id": "organize",
             "options": {
-              "excludeByName": {"Time": true},
+              "excludeByName": {
+                "Time": true
+              },
               "renameByName": {
                 "function_name": "Function",
                 "Value": "Total Bytes"
@@ -283,7 +410,12 @@
         "id": 11,
         "title": "Database Connection Pool",
         "type": "graph",
-        "gridPos": {"x": 0, "y": 40, "w": 12, "h": 8},
+        "gridPos": {
+          "x": 0,
+          "y": 40,
+          "w": 12,
+          "h": 8
+        },
         "targets": [
           {
             "expr": "database_connections_active",
@@ -302,15 +434,25 @@
           }
         ],
         "yaxes": [
-          {"format": "short", "label": "Connections"},
-          {"format": "short"}
+          {
+            "format": "short",
+            "label": "Connections"
+          },
+          {
+            "format": "short"
+          }
         ]
       },
       {
         "id": 12,
         "title": "Critical Error Rate",
         "type": "graph",
-        "gridPos": {"x": 12, "y": 40, "w": 12, "h": 8},
+        "gridPos": {
+          "x": 12,
+          "y": 40,
+          "w": 12,
+          "h": 8
+        },
         "targets": [
           {
             "expr": "rate(log_messages_total{level=\"error\"}[5m])",
@@ -324,15 +466,25 @@
           }
         ],
         "yaxes": [
-          {"format": "ops", "label": "Logs/sec"},
-          {"format": "short"}
+          {
+            "format": "ops",
+            "label": "Logs/sec"
+          },
+          {
+            "format": "short"
+          }
         ]
       },
       {
         "id": 13,
         "title": "Nginx Rate Limiting",
         "type": "graph",
-        "gridPos": {"x": 0, "y": 48, "w": 12, "h": 8},
+        "gridPos": {
+          "x": 0,
+          "y": 48,
+          "w": 12,
+          "h": 8
+        },
         "targets": [
           {
             "expr": "rate(nginx_rate_limit_rejections_total{status=\"REJECTED\"}[5m])",
@@ -346,9 +498,286 @@
           }
         ],
         "yaxes": [
-          {"format": "ops", "label": "Rejections/sec"},
-          {"format": "short"}
+          {
+            "format": "ops",
+            "label": "Rejections/sec"
+          },
+          {
+            "format": "short"
+          }
         ]
+      },
+      {
+        "type": "row",
+        "id": 14,
+        "title": "Stellar Submission Engine",
+        "collapsed": false,
+        "gridPos": {
+          "h": 1,
+          "w": 24,
+          "x": 0,
+          "y": 40
+        }
+      },
+      {
+        "type": "stat",
+        "id": 15,
+        "title": "Submission Queue Depth",
+        "gridPos": {
+          "h": 4,
+          "w": 6,
+          "x": 0,
+          "y": 41
+        },
+        "targets": [
+          {
+            "expr": "stellar_submission_queue_depth",
+            "legendFormat": "Submission Queue Depth"
+          }
+        ],
+        "options": {
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ]
+          }
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "type": "stat",
+        "id": 16,
+        "title": "Channel Pool Utilisation",
+        "gridPos": {
+          "h": 4,
+          "w": 6,
+          "x": 6,
+          "y": 41
+        },
+        "targets": [
+          {
+            "expr": "stellar_channel_pool_utilization_percent",
+            "legendFormat": "Channel Pool Utilisation"
+          }
+        ],
+        "options": {
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ]
+          }
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent"
+          }
+        }
+      },
+      {
+        "type": "stat",
+        "id": 17,
+        "title": "In-flight Transactions",
+        "gridPos": {
+          "h": 4,
+          "w": 6,
+          "x": 12,
+          "y": 41
+        },
+        "targets": [
+          {
+            "expr": "stellar_in_flight_transactions",
+            "legendFormat": "In-flight Transactions"
+          }
+        ],
+        "options": {
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ]
+          }
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "type": "stat",
+        "id": 18,
+        "title": "Surge Fee (stroops)",
+        "gridPos": {
+          "h": 4,
+          "w": 6,
+          "x": 18,
+          "y": 41
+        },
+        "targets": [
+          {
+            "expr": "stellar_surge_fee_stroops",
+            "legendFormat": "Surge Fee (stroops)"
+          }
+        ],
+        "options": {
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ]
+          }
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "type": "graph",
+        "id": 19,
+        "title": "Confirmation Latency (P50/P95/P99)",
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 45
+        },
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, rate(stellar_confirmation_delay_seconds_bucket[5m]))",
+            "legendFormat": "p50"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(stellar_confirmation_delay_seconds_bucket[5m]))",
+            "legendFormat": "p95"
+          },
+          {
+            "expr": "histogram_quantile(0.99, rate(stellar_confirmation_delay_seconds_bucket[5m]))",
+            "legendFormat": "p99"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "s"
+          },
+          {
+            "format": "short"
+          }
+        ]
+      },
+      {
+        "type": "graph",
+        "id": 20,
+        "title": "Stellar TX Throughput (submitted / confirmed / failed)",
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 45
+        },
+        "targets": [
+          {
+            "expr": "rate(stellar_tx_submitted_total[1m])",
+            "legendFormat": "submitted"
+          },
+          {
+            "expr": "rate(stellar_tx_confirmed_total[1m])",
+            "legendFormat": "confirmed"
+          },
+          {
+            "expr": "rate(stellar_tx_failed_total[1m])",
+            "legendFormat": "failed"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "ops"
+          },
+          {
+            "format": "short"
+          }
+        ]
+      },
+      {
+        "type": "row",
+        "id": 21,
+        "title": "Payment Provider Health",
+        "collapsed": false,
+        "gridPos": {
+          "h": 1,
+          "w": 24,
+          "x": 0,
+          "y": 53
+        }
+      },
+      {
+        "type": "graph",
+        "id": 22,
+        "title": "Circuit Breaker State by Provider (1=open/tripped)",
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 54
+        },
+        "targets": [
+          {
+            "expr": "aframp_circuit_breaker_state{provider=~\".+\"}",
+            "legendFormat": "{{provider}}"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "short"
+          },
+          {
+            "format": "short"
+          }
+        ]
+      },
+      {
+        "type": "row",
+        "id": 23,
+        "title": "Event Bus",
+        "collapsed": false,
+        "gridPos": {
+          "h": 1,
+          "w": 24,
+          "x": 0,
+          "y": 62
+        }
+      },
+      {
+        "type": "stat",
+        "id": 24,
+        "title": "Dropped Events (total)",
+        "gridPos": {
+          "h": 4,
+          "w": 6,
+          "x": 6,
+          "y": 63
+        },
+        "targets": [
+          {
+            "expr": "aframp_event_bus_dropped_total",
+            "legendFormat": "Dropped Events (total)"
+          }
+        ],
+        "options": {
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ]
+          }
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          }
+        }
       }
     ],
     "templating": {

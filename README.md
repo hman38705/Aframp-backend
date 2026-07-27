@@ -116,3 +116,31 @@ US_EAST_1_IP=1.2.3.4 EU_WEST_1_IP=5.6.7.8 AP_SOUTHEAST_1_IP=9.10.11.12 \
 ```
 
 Target: **< 30 ms** average for `/public/*` endpoints (cache hit at CloudFront PoP).
+
+---
+
+## Worker Configuration
+
+### Stellar Confirmation Worker (#782)
+
+| Env var | Default | Dev | Prod | Description |
+|---|---|---|---|---|
+| `STELLAR_CONFIRM_POLL_INTERVAL_SECS` | `15` | `1` | `5` | How often the worker polls Horizon for pending confirmations |
+| `STELLAR_CONFIRM_THRESHOLD` | `1` | `1` | `1` | Minimum ledger confirmations before marking complete |
+| `STELLAR_CONFIRM_STALE_TIMEOUT_SECS` | `1800` | `60` | `1800` | Transactions older than this are flagged stale |
+| `STELLAR_CONFIRM_BATCH_SIZE` | `200` | `50` | `200` | Max transactions fetched per polling cycle |
+| `STELLAR_CONFIRM_WINDOW_HOURS` | `48` | `1` | `48` | Look-back window for active transactions |
+
+### Address Book Maintenance Worker (#783)
+
+| Env var | Default | Description |
+|---|---|---|
+| `ADDRESS_BOOK_REVERIFY_BATCH_SIZE` | `100` | Max Stellar addresses re-verified per maintenance cycle. Lower under high Horizon load. |
+
+### Event Bus (#784)
+
+| Env var | Default | Description |
+|---|---|---|
+| `EVENT_BUS_CHANNEL_CAPACITY` | `1024` | Tokio broadcast channel buffer size. Increase if consumers log `aframp_event_bus_dropped_total` warnings. |
+
+When a slow consumer lags behind the buffer, dropped messages are logged at `WARN` level with the count and the `aframp_event_bus_dropped_total` metric is incremented. Use `EventBus::subscribe_guarded()` instead of `subscribe()` to get lag detection automatically.

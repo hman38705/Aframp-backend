@@ -21,9 +21,18 @@ use uuid::Uuid;
 // ---------------------------------------------------------------------------
 
 /// All tuneable knobs for the worker, loaded from environment variables.
+///
+/// | Env var                              | Default | Dev recommended | Prod recommended |
+/// |--------------------------------------|---------|-----------------|-----------------|
+/// | `STELLAR_CONFIRM_POLL_INTERVAL_SECS` | 15      | 1               | 5–15            |
+/// | `STELLAR_CONFIRM_THRESHOLD`          | 1       | 1               | 1               |
+/// | `STELLAR_CONFIRM_STALE_TIMEOUT_SECS` | 1800    | 60              | 1800            |
+/// | `STELLAR_CONFIRM_BATCH_SIZE`         | 200     | 50              | 200             |
+/// | `STELLAR_CONFIRM_WINDOW_HOURS`       | 48      | 1               | 48              |
 #[derive(Debug, Clone)]
 pub struct StellarConfirmationConfig {
-    /// How often the worker wakes up (default: 15 s).
+    /// How often the worker wakes up.
+    /// Env: `STELLAR_CONFIRM_POLL_INTERVAL_SECS` (default: 15 s, dev: 1 s).
     pub poll_interval: Duration,
     /// Minimum ledger confirmations required (default: 1).
     pub confirmation_threshold: u32,
