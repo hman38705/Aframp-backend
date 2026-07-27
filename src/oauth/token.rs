@@ -8,7 +8,7 @@ use uuid::Uuid;
 use super::keys::RsaKeyPair;
 use super::types::OAuthError;
 
-pub const ACCESS_TOKEN_TTL_SECS: u64 = 3_600; // 1 hour
+pub const ACCESS_TOKEN_TTL_SECS: u64 = 900; // 15 minutes (financial platform: keep access tokens short-lived, rely on refresh tokens for long sessions)
 
 // ── Claims ────────────────────────────────────────────────────────────────────
 
