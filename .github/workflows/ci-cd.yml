@@ -26,6 +26,34 @@ permissions:
   security-events: write
 
 jobs:
+  # ── Changelog enforcement: every PR must update CHANGELOG.md ───────────────
+  changelog-check:
+    name: Changelog Updated
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify CHANGELOG.md was updated
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          if git diff --name-only "$BASE"...HEAD | grep -q 'CHANGELOG.md'; then
+            echo "✅ CHANGELOG.md updated in this PR"
+          else
+            # Only require an update when source files changed
+            CHANGED=$(git diff --name-only "$BASE"...HEAD)
+            if echo "$CHANGED" | grep -qE '^(src/|migrations/|\.github/workflows/|Cargo\.toml)'; then
+              echo "❌ PR changes src/, migrations/, .github/workflows/, or Cargo.toml"
+              echo "   but CHANGELOG.md was not updated."
+              echo ""
+              echo "   Add an entry under [Unreleased] in CHANGELOG.md describing your change."
+              exit 1
+            else
+              echo "ℹ️  No source/migration/CI changes detected — CHANGELOG.md update not required"
+            fi
+          fi
+
   # ── Guard: PRs must target develop or master, not an arbitrary branch ────────
   check-target:
     name: Verify PR target branch

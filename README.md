@@ -2,6 +2,8 @@
 
 Rust/Axum backend for the Aframp platform — multi-region, edge-cached, globally distributed.
 
+> **Release history**: see [CHANGELOG.md](./CHANGELOG.md) for a full version history and migration log.
+
 ---
 
 ## Global Edge-Caching & Read-Only Replicas (Issue #348)
