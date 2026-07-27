@@ -204,6 +204,35 @@ pub async fn enforce_any_scope(scopes: Vec<String>, mut req: Request, next: Next
     next.run(req).await
 }
 
+// ── Startup-time scope registry validation ──────────────────────────────────
+
+/// Validate that every scope referenced by a `ScopeRequirement` used in route
+/// definitions is present in the OAuth scope registry
+/// (`crate::oauth::types::SUPPORTED_SCOPES`, mirrored from
+/// `migrations/20240324_create_oauth_scopes.sql`). Call this once at startup
+/// (e.g. in `main`) with the full list of `ScopeRequirement`s wired into the
+/// router so an unregistered scope fails fast instead of silently denying
+/// requests at runtime.
+pub fn validate_registered_scopes(requirements: &[ScopeRequirement]) -> Result<(), Vec<String>> {
+    let mut unknown = Vec::new();
+    for req in requirements {
+        let scopes: Vec<&String> = match req {
+            ScopeRequirement::Single(s) => vec![s],
+            ScopeRequirement::All(v) | ScopeRequirement::Any(v) => v.iter().collect(),
+        };
+        for scope in scopes {
+            if !crate::oauth::types::is_supported_scope(scope) {
+                unknown.push(scope.clone());
+            }
+        }
+    }
+    if unknown.is_empty() {
+        Ok(())
+    } else {
+        Err(unknown)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
