@@ -649,6 +649,17 @@ impl axum::response::IntoResponse for Error {
         use axum::Json;
         use serde_json::json;
 
+        // Generate a short correlation ID so the full internal error can be
+        // looked up in logs without exposing details to the client (#792).
+        let correlation_id = {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0);
+            format!("{:08x}", ts)
+        };
+
         let (status, message) = match &self {
             Error::Authentication(m) | Error::Unauthorized(m) => {
                 (StatusCode::UNAUTHORIZED, m.clone())
@@ -659,11 +670,24 @@ impl axum::response::IntoResponse for Error {
             Error::Conflict(m) => (StatusCode::CONFLICT, m.clone()),
             Error::TooManyRequests(m) => (StatusCode::TOO_MANY_REQUESTS, m.clone()),
             Error::Internal(m) | Error::Database(m) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, m.clone())
+                // Log full detail internally; never send to client (#792).
+                tracing::error!(
+                    correlation_id = %correlation_id,
+                    internal_detail = %m,
+                    "Internal server error"
+                );
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "An internal error occurred. Please contact support.".to_string(),
+                )
             }
         };
 
-        (status, Json(json!({ "error": message }))).into_response()
+        (
+            status,
+            Json(json!({ "error": message, "correlation_id": correlation_id })),
+        )
+            .into_response()
     }
 }
 
