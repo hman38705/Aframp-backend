@@ -16,8 +16,13 @@ env:
   CARGO_TERM_COLOR: always
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  # Minimum code coverage threshold (%)
-  COVERAGE_THRESHOLD: "60"
+  # Minimum overall code coverage threshold (%)
+  COVERAGE_THRESHOLD: "80"
+  # Minimum coverage threshold (%) for critical financial modules
+  CRITICAL_MODULE_COVERAGE_THRESHOLD: "90"
+  # Max allowed coverage regression (%) vs. the tracked baseline
+  COVERAGE_MAX_REGRESSION: "2"
+  COVERAGE_BASELINE_FILE: coverage-baseline.txt
 
 # ── Shared permissions ────────────────────────────────────────────────────────
 permissions:
@@ -152,9 +157,54 @@ jobs:
         run: |
           COVERAGE=$(cargo llvm-cov report --summary-only 2>/dev/null | grep -oP 'Lines.*?(\d+\.\d+)%' | grep -oP '\d+\.\d+' | head -1 || echo "0")
           echo "Coverage: ${COVERAGE}%"
+          echo "COVERAGE=${COVERAGE}" >> "$GITHUB_ENV"
           if (( $(echo "$COVERAGE < $COVERAGE_THRESHOLD" | bc -l) )); then
             echo "❌ Coverage ${COVERAGE}% is below threshold ${COVERAGE_THRESHOLD}%"
             exit 1
+          fi
+      - name: Enforce per-module coverage thresholds
+        run: |
+          cargo llvm-cov report --json --output-path coverage.json
+          FAILED=0
+          for module in src/stellar src/kyc src/payments; do
+            PCT=$(jq -r --arg m "$module" '
+              [.data[0].files[] | select(.filename | contains($m)) | .summary.lines] as $sums |
+              if ($sums | length) == 0 then 100
+              else (($sums | map(.covered) | add) / ($sums | map(.count) | add) * 100)
+              end
+            ' coverage.json)
+            printf '%s coverage: %.2f%%\n' "$module" "$PCT"
+            if (( $(echo "$PCT < $CRITICAL_MODULE_COVERAGE_THRESHOLD" | bc -l) )); then
+              echo "❌ ${module} coverage ${PCT}% is below critical-module threshold ${CRITICAL_MODULE_COVERAGE_THRESHOLD}%"
+              FAILED=1
+            fi
+          done
+          if [ "$FAILED" -eq 1 ]; then
+            exit 1
+          fi
+      - name: Enforce coverage trend (no regression >2% vs. baseline)
+        run: |
+          if [ -f "$COVERAGE_BASELINE_FILE" ]; then
+            BASELINE=$(cat "$COVERAGE_BASELINE_FILE")
+          else
+            BASELINE="$COVERAGE"
+          fi
+          echo "Baseline: ${BASELINE}%  Current: ${COVERAGE}%"
+          DROP=$(echo "$BASELINE - $COVERAGE" | bc -l)
+          if (( $(echo "$DROP > $COVERAGE_MAX_REGRESSION" | bc -l) )); then
+            echo "❌ Coverage dropped by ${DROP}% (baseline ${BASELINE}%, current ${COVERAGE}%) — exceeds allowed regression of ${COVERAGE_MAX_REGRESSION}%"
+            exit 1
+          fi
+      - name: Update coverage baseline
+        if: github.event_name == 'push'
+        run: |
+          echo "$COVERAGE" > "$COVERAGE_BASELINE_FILE"
+          if ! git diff --quiet -- "$COVERAGE_BASELINE_FILE"; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add "$COVERAGE_BASELINE_FILE"
+            git commit -m "chore(ci): update coverage baseline to ${COVERAGE}%"
+            git push
           fi
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
