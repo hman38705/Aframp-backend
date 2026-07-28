@@ -1,4 +1,5 @@
 use crate::payments::error::{PaymentError, PaymentResult};
+use crate::payments::error_mapping::PaymentProviderErrorMapping;
 use crate::payments::provider::PaymentProvider;
 use crate::payments::types::{
     Money, PaymentMethod, PaymentRequest, PaymentResponse, PaymentState, ProviderName,
@@ -135,12 +136,11 @@ impl PaymentProvider for PaystackProvider {
             .await?;
 
         if !raw.status {
-            return Err(PaymentError::ProviderError {
-                provider: "paystack".to_string(),
-                message: raw.message,
-                provider_code: None,
-                retryable: false,
-            });
+            return Err(PaymentProviderErrorMapping::classify(
+                "paystack",
+                None,
+                &raw.message,
+            ));
         }
         let data = raw.data;
         info!(reference = %data.reference, "paystack payment initiated");
@@ -172,12 +172,11 @@ impl PaymentProvider for PaystackProvider {
             )
             .await?;
         if !raw.status {
-            return Err(PaymentError::ProviderError {
-                provider: "paystack".to_string(),
-                message: raw.message,
-                provider_code: None,
-                retryable: false,
-            });
+            return Err(PaymentProviderErrorMapping::classify(
+                "paystack",
+                None,
+                &raw.message,
+            ));
         }
 
         let status = match raw.data.status.as_str() {
@@ -265,12 +264,11 @@ impl PaymentProvider for PaystackProvider {
             )
             .await?;
         if !recipient.status {
-            return Err(PaymentError::ProviderError {
-                provider: "paystack".to_string(),
-                message: recipient.message,
-                provider_code: None,
-                retryable: false,
-            });
+            return Err(PaymentProviderErrorMapping::classify(
+                "paystack",
+                None,
+                &recipient.message,
+            ));
         }
 
         let transfer_payload = serde_json::json!({
@@ -293,12 +291,11 @@ impl PaymentProvider for PaystackProvider {
             )
             .await?;
         if !transfer.status {
-            return Err(PaymentError::ProviderError {
-                provider: "paystack".to_string(),
-                message: transfer.message,
-                provider_code: None,
-                retryable: false,
-            });
+            return Err(PaymentProviderErrorMapping::classify(
+                "paystack",
+                None,
+                &transfer.message,
+            ));
         }
 
         let status = match transfer.data.status.as_str() {
@@ -412,12 +409,11 @@ impl PaymentProvider for PaystackProvider {
             .await?;
 
         if !raw.status {
-            return Err(PaymentError::ProviderError {
-                provider: "paystack".to_string(),
-                message: raw.message,
-                provider_code: None,
-                retryable: false,
-            });
+            return Err(PaymentProviderErrorMapping::classify(
+                "paystack",
+                None,
+                &raw.message,
+            ));
         }
 
         let balance = raw

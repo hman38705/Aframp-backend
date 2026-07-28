@@ -5,6 +5,9 @@
 
 #[cfg(feature = "database")]
 pub mod error;
+
+#[cfg(feature = "database")]
+pub mod error_mapping;
 #[cfg(feature = "database")]
 pub mod factory;
 #[cfg(feature = "database")]
@@ -24,6 +27,8 @@ pub mod webhook_replay;
 
 #[cfg(feature = "database")]
 pub use error::{PaymentError, PaymentResult};
+#[cfg(feature = "database")]
+pub use error_mapping::{Locale, PaymentProviderErrorMapping};
 #[cfg(feature = "database")]
 pub use factory::PaymentProviderFactory;
 #[cfg(feature = "database")]
