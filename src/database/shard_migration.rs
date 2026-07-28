@@ -160,6 +160,23 @@ impl ShardMigrator {
             .ok_or_else(|| format!("Shard {} not found or offline", shard_id))
     }
 
+    /// Validate that a SQL identifier (table or column name) contains only
+    /// alphanumeric characters and underscores, preventing SQL injection via
+    /// dynamic identifiers that cannot be bound as parameters (issue #720).
+    fn validate_identifier(name: &str) -> Result<(), String> {
+        if name.is_empty() {
+            return Err("SQL identifier must not be empty".to_string());
+        }
+        if name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            Ok(())
+        } else {
+            Err(format!(
+                "SQL identifier '{}' contains invalid characters (only [a-zA-Z0-9_] allowed)",
+                name
+            ))
+        }
+    }
+
     /// Fetch a batch of primary-key values from the source shard, ordered by
     /// `shard_key_col`, starting after `last_key`.
     async fn fetch_batch(
@@ -170,8 +187,12 @@ impl ShardMigrator {
         last_key: &Option<String>,
         batch_size: u32,
     ) -> Result<Vec<String>, String> {
+        // Validate identifiers before interpolation (issue #720).
+        Self::validate_identifier(table)?;
+        Self::validate_identifier(key_col)?;
+
         // Dynamic SQL — table and column names are operator-supplied (not user
-        // input), so string interpolation is acceptable here.
+        // input) and have been validated above.
         let sql = match last_key {
             Some(k) => format!(
                 "SELECT {key_col}::text FROM {table} WHERE {key_col}::text > $1 ORDER BY {key_col} LIMIT $2"
@@ -212,6 +233,10 @@ impl ShardMigrator {
         if keys.is_empty() {
             return Ok(0);
         }
+
+        // Validate identifiers before interpolation (issue #720).
+        Self::validate_identifier(table)?;
+        Self::validate_identifier(key_col)?;
 
         // Fetch full rows from source
         let placeholders: String = keys
@@ -260,6 +285,10 @@ impl ShardMigrator {
         if keys.is_empty() {
             return Ok(());
         }
+        // Validate identifiers before interpolation (issue #720).
+        Self::validate_identifier(table)?;
+        Self::validate_identifier(key_col)?;
+
         let placeholders: String = keys
             .iter()
             .enumerate()

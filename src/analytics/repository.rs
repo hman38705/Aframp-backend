@@ -21,25 +21,35 @@ impl AnalyticsRepository {
         to: DateTime<Utc>,
         period: &str,
     ) -> Result<Vec<VolumeByPeriod>, DatabaseError> {
-        let trunc = period_trunc(period);
-        sqlx::query_as::<_, VolumeByPeriod>(&format!(
+        // Use a parameterized CASE expression instead of format! interpolation
+        // to eliminate any SQL injection surface (issue #720).
+        sqlx::query_as::<_, VolumeByPeriod>(
             r#"
             SELECT
-                date_trunc('{trunc}', created_at)::text AS period,
-                from_currency                            AS currency,
-                type                                     AS transaction_type,
+                date_trunc(
+                    CASE $3::text
+                        WHEN 'daily'   THEN 'day'
+                        WHEN 'weekly'  THEN 'week'
+                        WHEN 'monthly' THEN 'month'
+                        ELSE 'day'
+                    END,
+                    created_at
+                )::text                              AS period,
+                from_currency                        AS currency,
+                type                                 AS transaction_type,
                 status,
-                COUNT(*)                                 AS count,
-                COALESCE(SUM(from_amount), 0)            AS total_volume
+                COUNT(*)                             AS count,
+                COALESCE(SUM(from_amount), 0)        AS total_volume
             FROM transactions
             WHERE created_at >= $1
               AND created_at <  $2
             GROUP BY 1, 2, 3, 4
             ORDER BY 1, 2, 3, 4
-            "#
-        ))
+            "#,
+        )
         .bind(from)
         .bind(to)
+        .bind(period)
         .fetch_all(&self.pool)
         .await
         .map_err(DatabaseError::from_sqlx)
@@ -53,11 +63,19 @@ impl AnalyticsRepository {
         to: DateTime<Utc>,
         period: &str,
     ) -> Result<Vec<CngnConversionPeriod>, DatabaseError> {
-        let trunc = period_trunc(period);
-        sqlx::query_as::<_, CngnConversionPeriod>(&format!(
+        // Parameterized CASE expression replaces format! interpolation (issue #720).
+        sqlx::query_as::<_, CngnConversionPeriod>(
             r#"
             SELECT
-                date_trunc('{trunc}', created_at)::text                                AS period,
+                date_trunc(
+                    CASE $3::text
+                        WHEN 'daily'   THEN 'day'
+                        WHEN 'weekly'  THEN 'week'
+                        WHEN 'monthly' THEN 'month'
+                        ELSE 'day'
+                    END,
+                    created_at
+                )::text                                                                AS period,
                 COALESCE(SUM(CASE WHEN type = 'onramp'  THEN cngn_amount ELSE 0 END), 0) AS minted,
                 COALESCE(SUM(CASE WHEN type = 'offramp' THEN cngn_amount ELSE 0 END), 0) AS redeemed,
                 COALESCE(
@@ -72,10 +90,11 @@ impl AnalyticsRepository {
               AND status = 'completed'
             GROUP BY 1
             ORDER BY 1
-            "#
-        ))
+            "#,
+        )
         .bind(from)
         .bind(to)
+        .bind(period)
         .fetch_all(&self.pool)
         .await
         .map_err(DatabaseError::from_sqlx)
@@ -89,18 +108,36 @@ impl AnalyticsRepository {
         to: DateTime<Utc>,
         period: &str,
     ) -> Result<Vec<ProviderPerformancePeriod>, DatabaseError> {
-        let trunc = period_trunc(period);
-        sqlx::query_as::<_, ProviderPerformancePeriod>(&format!(
+        // Parameterized CASE expression replaces format! interpolation (issue #720).
+        sqlx::query_as::<_, ProviderPerformancePeriod>(
             r#"
             WITH totals AS (
-                SELECT date_trunc('{trunc}', created_at) AS p, COUNT(*) AS grand_total
+                SELECT
+                    date_trunc(
+                        CASE $3::text
+                            WHEN 'daily'   THEN 'day'
+                            WHEN 'weekly'  THEN 'week'
+                            WHEN 'monthly' THEN 'month'
+                            ELSE 'day'
+                        END,
+                        created_at
+                    ) AS p,
+                    COUNT(*) AS grand_total
                 FROM transactions
                 WHERE created_at >= $1 AND created_at < $2
                   AND payment_provider IS NOT NULL
                 GROUP BY 1
             )
             SELECT
-                date_trunc('{trunc}', t.created_at)::text                          AS period,
+                date_trunc(
+                    CASE $3::text
+                        WHEN 'daily'   THEN 'day'
+                        WHEN 'weekly'  THEN 'week'
+                        WHEN 'monthly' THEN 'month'
+                        ELSE 'day'
+                    END,
+                    t.created_at
+                )::text                                                             AS period,
                 t.payment_provider                                                  AS provider,
                 COUNT(*)                                                            AS total_count,
                 COUNT(*) FILTER (WHERE t.status = 'completed')                     AS success_count,
@@ -115,16 +152,25 @@ impl AnalyticsRepository {
                     100.0 * COUNT(*) / NULLIF(tot.grand_total, 0), 2
                 )                                                                   AS volume_share_pct
             FROM transactions t
-            JOIN totals tot ON date_trunc('{trunc}', t.created_at) = tot.p
+            JOIN totals tot ON date_trunc(
+                CASE $3::text
+                    WHEN 'daily'   THEN 'day'
+                    WHEN 'weekly'  THEN 'week'
+                    WHEN 'monthly' THEN 'month'
+                    ELSE 'day'
+                END,
+                t.created_at
+            ) = tot.p
             WHERE t.created_at >= $1
               AND t.created_at <  $2
               AND t.payment_provider IS NOT NULL
             GROUP BY 1, 2, tot.grand_total
             ORDER BY 1, 2
-            "#
-        ))
+            "#,
+        )
         .bind(from)
         .bind(to)
+        .bind(period)
         .fetch_all(&self.pool)
         .await
         .map_err(DatabaseError::from_sqlx)
@@ -746,6 +792,9 @@ impl AnalyticsRepository {
 }
 
 /// Map API period labels to PostgreSQL `date_trunc` units.
+/// Kept as documentation of valid period values; the SQL queries use
+/// inline CASE expressions with bind parameters instead (issue #720).
+#[allow(dead_code)]
 fn period_trunc(period: &str) -> &'static str {
     match period {
         "daily" => "day",

@@ -448,6 +448,9 @@ impl AnomalyDetectionService {
     // ---------------------------------------------------------------------------
 
     async fn persist_system_status(&self, status: &SystemStatus) -> anyhow::Result<()> {
+        // Use .bind() for parameterized query — sqlx::query() takes only the SQL
+        // string; values must be bound separately to prevent any injection risk
+        // and to match the sqlx API correctly (issue #720).
         sqlx::query(
             r#"
             INSERT INTO system_status (status, updated_at)
@@ -456,8 +459,8 @@ impl AnomalyDetectionService {
                 status = EXCLUDED.status,
                 updated_at = EXCLUDED.updated_at
             "#,
-            status.to_string(),
         )
+        .bind(status.to_string())
         .execute(&self.pool)
         .await?;
 
