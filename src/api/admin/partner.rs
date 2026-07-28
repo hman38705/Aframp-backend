@@ -23,6 +23,7 @@ use axum::{
 use bigdecimal::BigDecimal;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::database::partner_repository::PartnerRepository;
@@ -41,7 +42,7 @@ pub struct AdminPartnerState {
 // Request types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreatePartnerRequest {
     pub slug: String,
     pub name: String,
@@ -50,12 +51,12 @@ pub struct CreatePartnerRequest {
     pub webhook_secret: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateStatusRequest {
     pub status: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpsertBrandingRequest {
     pub logo_url: Option<String>,
     pub primary_color: Option<String>,
@@ -64,7 +65,7 @@ pub struct UpsertBrandingRequest {
     pub language_overrides: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpsertFeeRequest {
     pub corridor: String,
     pub fee_type: String,
@@ -73,7 +74,7 @@ pub struct UpsertFeeRequest {
     pub max_amount: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpsertLimitsRequest {
     pub daily_volume_limit: Option<String>,
     pub per_tx_min: String,
@@ -107,6 +108,18 @@ fn parse_bd(s: &str) -> Option<BigDecimal> {
 // Handlers
 // ---------------------------------------------------------------------------
 
+#[utoipa::path(
+    post,
+    path = "/api/admin/partners",
+    tag = "admin",
+    summary = "Create a remittance partner",
+    request_body = CreatePartnerRequest,
+    responses(
+        (status = 201, description = "Partner created"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn create_partner(
     State(state): State<Arc<AdminPartnerState>>,
     Json(body): Json<CreatePartnerRequest>,
@@ -135,6 +148,17 @@ pub async fn create_partner(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/admin/partners",
+    tag = "admin",
+    summary = "List remittance partners",
+    responses(
+        (status = 200, description = "List of partners"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn list_partners(State(state): State<Arc<AdminPartnerState>>) -> Response {
     match state.repo.list_partners().await {
         Ok(partners) => {
@@ -153,6 +177,19 @@ pub async fn list_partners(State(state): State<Arc<AdminPartnerState>>) -> Respo
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/admin/partners/{id}",
+    tag = "admin",
+    summary = "Get a remittance partner",
+    params(("id" = Uuid, Path, description = "Partner ID")),
+    responses(
+        (status = 200, description = "Partner details"),
+        (status = 404, description = "Partner not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn get_partner(
     State(state): State<Arc<AdminPartnerState>>,
     Path(id): Path<Uuid>,
@@ -167,6 +204,20 @@ pub async fn get_partner(
     }
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/admin/partners/{id}/status",
+    tag = "admin",
+    summary = "Update a partner's status",
+    params(("id" = Uuid, Path, description = "Partner ID")),
+    request_body = UpdateStatusRequest,
+    responses(
+        (status = 200, description = "Status updated"),
+        (status = 400, description = "Invalid status value"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn update_partner_status(
     State(state): State<Arc<AdminPartnerState>>,
     Path(id): Path<Uuid>,
@@ -181,6 +232,19 @@ pub async fn update_partner_status(
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/admin/partners/{id}/branding",
+    tag = "admin",
+    summary = "Upsert a partner's branding",
+    params(("id" = Uuid, Path, description = "Partner ID")),
+    request_body = UpsertBrandingRequest,
+    responses(
+        (status = 200, description = "Branding updated"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn upsert_branding(
     State(state): State<Arc<AdminPartnerState>>,
     Path(id): Path<Uuid>,
@@ -203,6 +267,18 @@ pub async fn upsert_branding(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/admin/partners/{id}/branding",
+    tag = "admin",
+    summary = "Get a partner's branding",
+    params(("id" = Uuid, Path, description = "Partner ID")),
+    responses(
+        (status = 200, description = "Branding configuration"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn get_branding(
     State(state): State<Arc<AdminPartnerState>>,
     Path(id): Path<Uuid>,
@@ -222,6 +298,20 @@ pub async fn get_branding(
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/admin/partners/{id}/fees",
+    tag = "admin",
+    summary = "Upsert a partner fee schedule entry",
+    params(("id" = Uuid, Path, description = "Partner ID")),
+    request_body = UpsertFeeRequest,
+    responses(
+        (status = 200, description = "Fee updated"),
+        (status = 400, description = "Invalid fee_value or fee_type"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn upsert_fee(
     State(state): State<Arc<AdminPartnerState>>,
     Path(id): Path<Uuid>,
@@ -251,6 +341,18 @@ pub async fn upsert_fee(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/admin/partners/{id}/fees",
+    tag = "admin",
+    summary = "List a partner's fee schedule",
+    params(("id" = Uuid, Path, description = "Partner ID")),
+    responses(
+        (status = 200, description = "Fee schedule entries"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn list_fees(
     State(state): State<Arc<AdminPartnerState>>,
     Path(id): Path<Uuid>,
@@ -274,6 +376,20 @@ pub async fn list_fees(
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/admin/partners/{id}/limits",
+    tag = "admin",
+    summary = "Upsert a partner's transaction limits",
+    params(("id" = Uuid, Path, description = "Partner ID")),
+    request_body = UpsertLimitsRequest,
+    responses(
+        (status = 200, description = "Limits updated"),
+        (status = 400, description = "Invalid per_tx_min"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn upsert_limits(
     State(state): State<Arc<AdminPartnerState>>,
     Path(id): Path<Uuid>,
@@ -299,6 +415,18 @@ pub async fn upsert_limits(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/admin/partners/{id}/limits",
+    tag = "admin",
+    summary = "Get a partner's transaction limits",
+    params(("id" = Uuid, Path, description = "Partner ID")),
+    responses(
+        (status = 200, description = "Transaction limits"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn get_limits(
     State(state): State<Arc<AdminPartnerState>>,
     Path(id): Path<Uuid>,
@@ -319,6 +447,18 @@ pub async fn get_limits(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/admin/partners/{id}/settlements",
+    tag = "admin",
+    summary = "List a partner's settlements",
+    params(("id" = Uuid, Path, description = "Partner ID")),
+    responses(
+        (status = 200, description = "Settlement history (last 90 days)"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn list_settlements(
     State(state): State<Arc<AdminPartnerState>>,
     Path(id): Path<Uuid>,

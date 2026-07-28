@@ -18,6 +18,17 @@ pub struct KenyaWebhookState {
 }
 
 /// POST /webhooks/mpesa_kenya
+#[utoipa::path(
+    post,
+    path = "/webhooks/mpesa_kenya",
+    tag = "webhooks",
+    summary = "Receive an M-Pesa Kenya disbursement webhook",
+    description = "Receives Safaricom B2C result callbacks for the Kenya corridor, mapping M-Pesa result codes onto Aframp transaction states and queuing cNGN refunds on disbursement failure. Body is the raw M-Pesa JSON payload (application/json). Not JWT-authenticated — trust is established via the M-Pesa callback contract.",
+    responses(
+        (status = 200, description = "Webhook processed (always returns 200 to acknowledge receipt to Safaricom, even when the referenced transfer cannot be matched or updated)"),
+        (status = 400, description = "Invalid JSON payload")
+    )
+)]
 pub async fn handle_mpesa_kenya_webhook(
     State(state): State<Arc<KenyaWebhookState>>,
     body: String,

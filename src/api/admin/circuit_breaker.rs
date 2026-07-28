@@ -12,12 +12,13 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{error, info, warn};
+use utoipa::ToSchema;
 
 // ---------------------------------------------------------------------------
 // Request/Response Types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct EmergencyStopRequest {
     /// Reason for emergency stop
     pub reason: String,
@@ -27,11 +28,11 @@ pub struct EmergencyStopRequest {
     pub auth_codes: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct AuditResetRequest {
     /// First auditor identifier
     pub auditor_1: String,
-    /// Second auditor identifier  
+    /// Second auditor identifier
     pub auditor_2: String,
     /// Reason for reset
     pub reset_reason: String,
@@ -39,7 +40,7 @@ pub struct AuditResetRequest {
     pub audit_codes: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SystemStatusResponse {
     pub status: String,
     pub triggered_at: Option<String>,
@@ -48,7 +49,7 @@ pub struct SystemStatusResponse {
     pub is_operational: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct EmergencyStopResponse {
     pub success: bool,
     pub status: String,
@@ -56,7 +57,7 @@ pub struct EmergencyStopResponse {
     pub triggered_at: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AuditResetResponse {
     pub success: bool,
     pub status: String,
@@ -80,6 +81,17 @@ pub struct CircuitBreakerApiState {
 /// GET /api/admin/circuit-breaker/status
 ///
 /// Get current circuit breaker status (requires admin access)
+#[utoipa::path(
+    get,
+    path = "/api/admin/circuit-breaker/status",
+    tag = "admin",
+    summary = "Get circuit breaker status",
+    responses(
+        (status = 200, description = "Current circuit breaker status", body = SystemStatusResponse),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn get_system_status(
     State(state): State<Arc<CircuitBreakerApiState>>,
 ) -> Result<impl IntoResponse, crate::error::AppError> {
@@ -101,6 +113,20 @@ pub async fn get_system_status(
 /// POST /api/admin/circuit-breaker/emergency-stop
 ///
 /// Manual emergency stop with multi-sig protection
+#[utoipa::path(
+    post,
+    path = "/api/admin/circuit-breaker/emergency-stop",
+    tag = "admin",
+    summary = "Trigger emergency stop",
+    description = "Manual emergency stop with multi-signature authorization protection",
+    request_body = EmergencyStopRequest,
+    responses(
+        (status = 200, description = "Emergency stop result", body = EmergencyStopResponse),
+        (status = 403, description = "Invalid authorization codes"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn emergency_stop(
     State(state): State<Arc<CircuitBreakerApiState>>,
     Json(req): Json<EmergencyStopRequest>,
@@ -166,6 +192,20 @@ pub async fn emergency_stop(
 /// POST /api/admin/circuit-breaker/audit-reset
 ///
 /// Reset system after manual audit by two authorized executives
+#[utoipa::path(
+    post,
+    path = "/api/admin/circuit-breaker/audit-reset",
+    tag = "admin",
+    summary = "Reset system after audit",
+    description = "Reset the system after a manual audit performed by two distinct authorized executives",
+    request_body = AuditResetRequest,
+    responses(
+        (status = 200, description = "Audit reset result", body = AuditResetResponse),
+        (status = 403, description = "Invalid audit authorization codes"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn audit_reset(
     State(state): State<Arc<CircuitBreakerApiState>>,
     Json(req): Json<AuditResetRequest>,
@@ -237,6 +277,17 @@ pub async fn audit_reset(
 /// GET /api/admin/circuit-breaker/health
 ///
 /// Health check endpoint that includes circuit breaker status
+#[utoipa::path(
+    get,
+    path = "/api/admin/circuit-breaker/health",
+    tag = "admin",
+    summary = "Circuit breaker health check",
+    responses(
+        (status = 200, description = "System is healthy"),
+        (status = 503, description = "System is degraded or halted")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn circuit_breaker_health(
     State(state): State<Arc<CircuitBreakerApiState>>,
 ) -> Result<impl IntoResponse, crate::error::AppError> {

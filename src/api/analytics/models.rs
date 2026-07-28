@@ -2,13 +2,14 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
 // Shared enums
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SnapshotPeriod {
     Daily,
@@ -26,7 +27,7 @@ impl SnapshotPeriod {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SpendingCategory {
     BillPayments,
@@ -55,7 +56,7 @@ impl SpendingCategory {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TimeRange {
     Last7Days,
@@ -66,7 +67,7 @@ pub enum TimeRange {
     Custom,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Granularity {
     Daily,
@@ -74,7 +75,7 @@ pub enum Granularity {
     Monthly,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AnomalyType {
     VolumeSpike,
@@ -98,7 +99,7 @@ impl AnomalyType {
 // Query params
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct AnalyticsQuery {
     pub range: Option<TimeRange>,
     pub granularity: Option<Granularity>,
@@ -106,7 +107,7 @@ pub struct AnalyticsQuery {
     pub to: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ExportQuery {
     pub from: DateTime<Utc>,
     pub to: DateTime<Utc>,
@@ -117,7 +118,7 @@ pub struct ExportQuery {
 // Consumer-facing responses
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AnalyticsSummaryResponse {
     pub wallet_address: String,
     pub period_start: DateTime<Utc>,
@@ -132,7 +133,7 @@ pub struct AnalyticsSummaryResponse {
     pub delta_cngn_received_pct: Option<f64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SpendingBreakdownItem {
     pub category: String,
     pub tx_count: i32,
@@ -140,7 +141,7 @@ pub struct SpendingBreakdownItem {
     pub percentage: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SpendingBreakdownResponse {
     pub wallet_address: String,
     pub period_start: DateTime<Utc>,
@@ -148,21 +149,21 @@ pub struct SpendingBreakdownResponse {
     pub categories: Vec<SpendingBreakdownItem>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct TrendDataPoint {
     pub timestamp: DateTime<Utc>,
     pub tx_count: i64,
     pub cngn_volume: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct TrendsResponse {
     pub wallet_address: String,
     pub granularity: String,
     pub data_points: Vec<TrendDataPoint>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct CounterpartyItem {
     pub counterparty_id: String,
     pub counterparty_type: String,
@@ -172,13 +173,13 @@ pub struct CounterpartyItem {
     pub last_tx_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct CounterpartiesResponse {
     pub wallet_address: String,
     pub counterparties: Vec<CounterpartyItem>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ProviderUsageItem {
     pub provider: String,
     pub tx_count: i64,
@@ -186,13 +187,13 @@ pub struct ProviderUsageItem {
     pub success_rate: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ProvidersResponse {
     pub wallet_address: String,
     pub providers: Vec<ProviderUsageItem>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct InsightResponse {
     pub id: Uuid,
     pub wallet_address: String,
@@ -208,13 +209,13 @@ pub struct InsightResponse {
     pub generated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct InsightPreferencesRequest {
     pub weekly_insights: bool,
     pub monthly_insights: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct InsightPreferencesResponse {
     pub wallet_address: String,
     pub weekly_insights: bool,
@@ -225,7 +226,7 @@ pub struct InsightPreferencesResponse {
 // Admin responses
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AdminOverviewResponse {
     pub total_wallets: i64,
     pub active_wallets_period: i64,
@@ -235,7 +236,7 @@ pub struct AdminOverviewResponse {
     pub period_end: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AdminActivityResponse {
     pub total_cngn_transferred: String,
     pub total_fiat_onramped: String,
@@ -247,7 +248,7 @@ pub struct AdminActivityResponse {
     pub period_end: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AdminRetentionResponse {
     pub retained_wallets: i64,
     pub churned_wallets: i64,
@@ -257,7 +258,7 @@ pub struct AdminRetentionResponse {
     pub period_end: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct CohortDataPoint {
     pub cohort_month: String,
     pub cohort_size: i64,
@@ -265,12 +266,12 @@ pub struct CohortDataPoint {
     pub retention_rate: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AdminCohortsResponse {
     pub cohorts: Vec<CohortDataPoint>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct RiskBand {
     pub band: String,
     pub min_score: f64,
@@ -278,14 +279,14 @@ pub struct RiskBand {
     pub wallet_count: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AdminRiskDistributionResponse {
     pub bands: Vec<RiskBand>,
     pub avg_risk_score: f64,
     pub high_risk_count: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AnomalyFlagItem {
     pub id: Uuid,
     pub wallet_address: String,
@@ -295,13 +296,13 @@ pub struct AnomalyFlagItem {
     pub routed_to_compliance: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AdminAnomaliesResponse {
     pub anomalies: Vec<AnomalyFlagItem>,
     pub total: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct BehaviourProfileResponse {
     pub wallet_address: String,
     pub avg_tx_size: String,
@@ -313,7 +314,7 @@ pub struct BehaviourProfileResponse {
     pub profile_updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ExportResponse {
     pub export_id: Uuid,
     pub status: String,

@@ -97,15 +97,11 @@ fn default_limit() -> u32 {
 }
 
 // ─── Onramp Schemas ──────────────────────────────────────────────────────────
-
-/// Request body for POST /api/onramp/quote
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct OnrampQuoteRequest {
-    pub amount_ngn: String,
-    pub wallet_address: String,
-    pub provider: String,
-    pub chain: Chain,
-}
+//
+// Request/response schemas for POST /api/onramp/quote, POST /api/onramp/initiate,
+// and GET /api/onramp/status/:tx_id live in their owning handler modules
+// (`crate::api::onramp::{models, initiate, status}`) and are registered directly
+// in `components(schemas(...))` below.
 
 /// Fee breakdown inside a quote response.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -115,19 +111,6 @@ pub struct QuoteFeeSummary {
     pub total_fee_ngn: String,
     pub platform_fee_pct: String,
     pub provider_fee_pct: String,
-}
-
-/// Response for POST /api/onramp/quote
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct OnrampQuoteResponse {
-    pub quote_id: String,
-    pub expires_at: String,
-    pub expires_in_seconds: i64,
-    pub amount_ngn: String,
-    pub amount_cngn: String,
-    pub fees: QuoteFeeSummary,
-    pub trustline_required: bool,
-    pub liquidity_available: bool,
 }
 
 /// Request body for POST /api/onramp/initiate
@@ -144,19 +127,6 @@ pub struct OnrampInitiateResponse {
     pub status: TransactionStatus,
     pub payment_reference: String,
     pub amount_ngn: String,
-}
-
-/// Response for GET /api/onramp/status/:tx_id
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct OnrampStatusResponse {
-    pub transaction_id: String,
-    pub status: TransactionStatus,
-    pub amount_ngn: String,
-    pub amount_cngn: String,
-    pub wallet_address: String,
-    pub stellar_tx_hash: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
 }
 
 // ─── Offramp Schemas ─────────────────────────────────────────────────────────
@@ -371,29 +341,6 @@ pub struct ScopeDefinition {
     pub applicable_consumer_types: Vec<String>,
 }
 
-/// Response for GET /api/admin/scopes
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct ScopesListResponse {
-    pub scopes: Vec<ScopeDefinition>,
-    pub total: u32,
-}
-
-/// Scopes currently assigned to an API key.
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct KeyScopesResponse {
-    pub key_id: String,
-    pub consumer_id: String,
-    pub consumer_type: String,
-    pub scopes: Vec<String>,
-}
-
-/// Request body for PATCH /api/admin/consumers/:consumer_id/keys/:key_id/scopes
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct UpdateScopesRequest {
-    /// Complete scope list to assign — replaces all existing scopes for this key.
-    pub scopes: Vec<String>,
-}
-
 /// Signed Proof-of-Reserves response returned by `GET /v1/public/transparency`.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct TransparencyResponseSchema {
@@ -470,11 +417,8 @@ See the cNGN Integration Guide in `/docs/cngn/` for setup instructions.
         Chain,
         PaginationQuery,
         QuoteFeeSummary,
-        OnrampQuoteRequest,
-        OnrampQuoteResponse,
         OnrampInitiateRequest,
         OnrampInitiateResponse,
-        OnrampStatusResponse,
         OfframpQuoteRequest,
         OfframpQuoteResponse,
         OfframpInitiateRequest,
@@ -496,22 +440,276 @@ See the cNGN Integration Guide in `/docs/cngn/` for setup instructions.
         BatchItemStatus,
         BatchStatusResponse,
         ScopeDefinition,
-        ScopesListResponse,
-        KeyScopesResponse,
-        UpdateScopesRequest,
         TransparencyResponseSchema,
         ReserveDataPointSchema,
         TransparencyHistorySchema,
+
+        // ─ Onramp ─
+        crate::api::onramp::models::OnrampQuoteRequest,
+        crate::api::onramp::models::OnrampQuoteResponse,
+        crate::api::onramp::models::ProviderFeeDetail,
+        crate::api::onramp::models::PlatformFeeDetail,
+        crate::api::onramp::models::PaymentMethodFeeDetail,
+        crate::api::onramp::models::FeeBreakdown,
+        crate::api::onramp::models::Breakdown,
+        crate::api::onramp::models::TrustlineStatus,
+        crate::api::onramp::models::Validity,
+        crate::api::onramp::models::NextSteps,
+        crate::api::onramp::initiate::InitiateOnrampRequest,
+        crate::api::onramp::initiate::InitiateOnrampResponse,
+        crate::api::onramp::initiate::PaymentInstructions,
+        crate::api::onramp::initiate::QuoteSummary,
+        crate::api::onramp::status::OnrampStatusResponse,
+        crate::api::onramp::status::TransactionDetail,
+        crate::api::onramp::status::TransactionFees,
+        crate::api::onramp::status::ProviderStatus,
+        crate::api::onramp::status::BlockchainStatus,
+        crate::api::onramp::status::TimelineEntry,
+
+        // ─ Admin: API keys ─
+        crate::api::admin::keys::IssueKeyRequest,
+        crate::api::admin::keys::IssueKeyResponse,
+        crate::api::admin::keys::KeySummary,
+
+        // ─ Developer: self-service API keys ─
+        crate::api::developer::keys::SelfServiceIssueRequest,
+        crate::api::developer::keys::IssueKeyResponse,
+        crate::api::developer::keys::KeySummary,
+
+        // ─ Admin: scopes ─
+        crate::api::admin::scopes::ScopeRow,
+        crate::api::admin::scopes::ScopesListResponse,
+        crate::api::admin::scopes::KeyScopesResponse,
+        crate::api::admin::scopes::UpdateScopesRequest,
+        crate::api::admin::scopes::ErrorResponse,
+        crate::api::admin::scopes::ErrorDetail,
+
+        // ─ Admin: revocation & blacklist ─
+        crate::api::admin::revocation::RevokeKeyRequest,
+        crate::api::admin::revocation::AdminRevokeKeyRequest,
+        crate::api::admin::revocation::RevokeAllRequest,
+        crate::api::admin::revocation::BlacklistConsumerRequest,
+        crate::api::admin::revocation::RevokeKeyResponse,
+        crate::api::admin::revocation::RevokeAllResponse,
+        crate::api::admin::revocation::BlacklistResponse,
+        crate::api::admin::revocation::RevocationListParams,
+        crate::api::admin::revocation::RevocationListResponse,
+        crate::api::admin::revocation::ErrorBody,
+
+        // ─ Admin: partner management ─
+        crate::api::admin::partner::CreatePartnerRequest,
+        crate::api::admin::partner::UpdateStatusRequest,
+        crate::api::admin::partner::UpsertBrandingRequest,
+        crate::api::admin::partner::UpsertFeeRequest,
+        crate::api::admin::partner::UpsertLimitsRequest,
+
+        // ─ Admin: reconciliation ─
+        crate::api::admin::reconciliation::ListDiscrepanciesQuery,
+        crate::api::admin::reconciliation::ResolveDiscrepancyRequest,
+        crate::api::admin::reconciliation::DiscrepancyRow,
+        crate::api::admin::reconciliation::ReportRow,
+
+        // ─ Admin: circuit breaker ─
+        crate::api::admin::circuit_breaker::EmergencyStopRequest,
+        crate::api::admin::circuit_breaker::AuditResetRequest,
+        crate::api::admin::circuit_breaker::SystemStatusResponse,
+        crate::api::admin::circuit_breaker::EmergencyStopResponse,
+        crate::api::admin::circuit_breaker::AuditResetResponse,
+
+        // ─ Admin: dashboard ─
+        crate::api::admin::dashboard::DashboardStatusResponse,
+        crate::api::admin::dashboard::SystemHealthResponse,
+        crate::api::admin::dashboard::HealthCheck,
+        crate::api::admin::dashboard::AlertHistoryResponse,
+        crate::api::admin::dashboard::AlertEntry,
+        crate::api::admin::dashboard::AlertHistoryParams,
+
+        // ─ Admin: analytics ─
+        crate::api::admin::analytics::PeriodQuery,
+
+        // ─ Analytics (consumer + admin) ─
+        crate::api::analytics::models::AnalyticsQuery,
+        crate::api::analytics::models::ExportQuery,
+        crate::api::analytics::models::AnalyticsSummaryResponse,
+        crate::api::analytics::models::SpendingBreakdownItem,
+        crate::api::analytics::models::SpendingBreakdownResponse,
+        crate::api::analytics::models::TrendDataPoint,
+        crate::api::analytics::models::TrendsResponse,
+        crate::api::analytics::models::CounterpartyItem,
+        crate::api::analytics::models::CounterpartiesResponse,
+        crate::api::analytics::models::ProviderUsageItem,
+        crate::api::analytics::models::ProvidersResponse,
+        crate::api::analytics::models::InsightResponse,
+        crate::api::analytics::models::InsightPreferencesRequest,
+        crate::api::analytics::models::InsightPreferencesResponse,
+        crate::api::analytics::models::AdminOverviewResponse,
+        crate::api::analytics::models::AdminActivityResponse,
+        crate::api::analytics::models::AdminRetentionResponse,
+        crate::api::analytics::models::CohortDataPoint,
+        crate::api::analytics::models::AdminCohortsResponse,
+        crate::api::analytics::models::RiskBand,
+        crate::api::analytics::models::AdminRiskDistributionResponse,
+        crate::api::analytics::models::AnomalyFlagItem,
+        crate::api::analytics::models::AdminAnomaliesResponse,
+        crate::api::analytics::models::BehaviourProfileResponse,
+        crate::api::analytics::models::ExportResponse,
+
+        // ─ Mint requests ─
+        crate::api::mint::models::SubmitMintRequest,
+        crate::api::mint::models::SubmitMintResponse,
+        crate::api::mint::models::ApproveMintRequest,
+        crate::api::mint::models::RejectMintRequest,
+        crate::api::mint::models::MintActionResponse,
+        crate::api::mint::models::ApprovalEntry,
+        crate::api::mint::models::AuditEntry,
+        crate::api::mint::models::MintRequestDetail,
+        crate::api::mint::models::ListMintRequestsQuery,
+        crate::api::mint::models::ListMintRequestsResponse,
+
+        // ─ Mint signer onboarding & quorum ─
+        crate::admin::mint_signer_models::MintSigner,
+        crate::admin::mint_signer_models::MintSignerChallenge,
+        crate::admin::mint_signer_models::MintSignerActivity,
+        crate::admin::mint_signer_models::MintSignerKeyRotation,
+        crate::admin::mint_signer_models::MintQuorumConfig,
+        crate::admin::mint_signer_models::InitiateOnboardingRequest,
+        crate::admin::mint_signer_models::CompleteOnboardingRequest,
+        crate::admin::mint_signer_models::RotateKeyRequest,
+        crate::admin::mint_signer_models::SuspendSignerRequest,
+        crate::admin::mint_signer_models::UpdateQuorumRequest,
+        crate::admin::mint_signer_models::SignerSummary,
+        crate::admin::mint_signer_models::QuorumStatus,
+
+        // ─ Admin accounts ─
+        crate::admin::models::AdminRoleConfig,
+        crate::admin::models::AdminPermission,
+        crate::admin::models::AdminAccount,
+        crate::admin::models::CreateAdminAccountRequest,
+        crate::admin::models::ActiveAdminSession,
+
+        // ─ Partner (self-service) ─
+        crate::api::partner::QuoteRequest,
+        crate::api::partner::QuoteResponse,
+        crate::api::partner::TransferRequest,
+        crate::api::partner::TransferResponse,
     )),
     paths(
-        crate::partner::handlers::register_partner,
-        crate::partner::handlers::get_partner,
-        crate::partner::handlers::provision_credential,
-        crate::partner::handlers::revoke_credential,
-        crate::partner::handlers::validate_partner,
-        crate::partner::handlers::promote_to_production,
-        crate::partner::handlers::list_deprecations,
-        crate::partner::handlers::partner_me,
+        // ─ Onramp ─
+        crate::api::onramp::quote::create_quote,
+        crate::api::onramp::initiate::initiate_onramp,
+        crate::api::onramp::status::get_onramp_status,
+
+        // ─ Admin: mint signers ─
+        crate::admin::mint_signer_handlers::initiate_onboarding,
+        crate::admin::mint_signer_handlers::complete_onboarding,
+        crate::admin::mint_signer_handlers::confirm_identity,
+        crate::admin::mint_signer_handlers::request_challenge,
+        crate::admin::mint_signer_handlers::rotate_key,
+        crate::admin::mint_signer_handlers::request_rotation_challenge,
+        crate::admin::mint_signer_handlers::suspend_signer,
+        crate::admin::mint_signer_handlers::remove_signer,
+        crate::admin::mint_signer_handlers::list_signers,
+        crate::admin::mint_signer_handlers::get_signer,
+        crate::admin::mint_signer_handlers::get_signer_activity,
+        crate::admin::mint_signer_handlers::get_quorum,
+        crate::admin::mint_signer_handlers::update_quorum,
+
+        // ─ Admin: analytics ─
+        crate::api::admin::analytics::get_overview,
+        crate::api::admin::analytics::get_activity,
+        crate::api::admin::analytics::get_retention,
+        crate::api::admin::analytics::get_cohorts,
+        crate::api::admin::analytics::get_risk_distribution,
+        crate::api::admin::analytics::get_anomalies,
+        crate::api::admin::analytics::get_behaviour_profile,
+        crate::api::admin::analytics::export_admin_analytics,
+
+        // ─ Admin: circuit breaker ─
+        crate::api::admin::circuit_breaker::get_system_status,
+        crate::api::admin::circuit_breaker::emergency_stop,
+        crate::api::admin::circuit_breaker::audit_reset,
+        crate::api::admin::circuit_breaker::circuit_breaker_health,
+
+        // ─ Admin: dashboard ─
+        crate::api::admin::dashboard::get_dashboard_status,
+        crate::api::admin::dashboard::get_system_health,
+        crate::api::admin::dashboard::get_alert_history,
+        crate::api::admin::dashboard::get_system_metrics,
+
+        // ─ Admin: API keys ─
+        crate::api::admin::keys::issue_key,
+        crate::api::admin::keys::list_keys,
+        crate::api::admin::keys::revoke_key,
+
+        // ─ Admin: partner management ─
+        crate::api::admin::partner::create_partner,
+        crate::api::admin::partner::list_partners,
+        crate::api::admin::partner::get_partner,
+        crate::api::admin::partner::update_partner_status,
+        crate::api::admin::partner::upsert_branding,
+        crate::api::admin::partner::get_branding,
+        crate::api::admin::partner::upsert_fee,
+        crate::api::admin::partner::list_fees,
+        crate::api::admin::partner::upsert_limits,
+        crate::api::admin::partner::get_limits,
+        crate::api::admin::partner::list_settlements,
+
+        // ─ Admin: reconciliation ─
+        crate::api::admin::reconciliation::list_discrepancies,
+        crate::api::admin::reconciliation::resolve_discrepancy,
+        crate::api::admin::reconciliation::list_reports,
+        crate::api::admin::reconciliation::close_period,
+
+        // ─ Admin: revocation & blacklist ─
+        crate::api::admin::revocation::consumer_revoke_key,
+        crate::api::admin::revocation::admin_revoke_key,
+        crate::api::admin::revocation::admin_revoke_all_consumer_keys,
+        crate::api::admin::revocation::admin_blacklist_consumer,
+        crate::api::admin::revocation::admin_lift_consumer_blacklist,
+        crate::api::admin::revocation::list_revocations,
+        crate::api::admin::revocation::list_blacklist,
+
+        // ─ Admin: scopes ─
+        crate::api::admin::scopes::list_scopes,
+        crate::api::admin::scopes::get_key_scopes,
+        crate::api::admin::scopes::update_key_scopes,
+
+        // ─ Analytics (consumer + admin) ─
+        crate::api::analytics::get_summary,
+        crate::api::analytics::get_spending,
+        crate::api::analytics::get_trends,
+        crate::api::analytics::get_counterparties,
+        crate::api::analytics::get_providers,
+        crate::api::analytics::get_insights,
+        crate::api::analytics::get_insight_preferences,
+        crate::api::analytics::update_insight_preferences,
+        crate::api::analytics::export_analytics,
+
+        // ─ Developer: self-service API keys ─
+        crate::api::developer::keys::issue_key,
+        crate::api::developer::keys::list_keys,
+        crate::api::developer::keys::revoke_key,
+
+        // ─ Mint requests ─
+        crate::api::mint::handlers::submit_mint_request,
+        crate::api::mint::handlers::approve_mint_request,
+        crate::api::mint::handlers::reject_mint_request,
+        crate::api::mint::handlers::get_mint_request,
+        crate::api::mint::handlers::list_mint_requests,
+        crate::api::mint::handlers::get_mint_audit,
+
+        // ─ Partner (self-service) ─
+        crate::api::partner::get_quote,
+        crate::api::partner::initiate_transfer,
+        crate::api::partner::get_transfer_status,
+        crate::api::partner::get_liquidity,
+        crate::api::partner::get_settlements,
+        crate::api::partner::get_branding,
+
+        // ─ Webhooks ─
+        crate::api::webhooks::handle_webhook,
+        crate::corridors::ghana::webhook::handle_hubtel_ghana_webhook,
+        crate::corridors::kenya::webhook::handle_mpesa_kenya_webhook,
     ),
     tags(
         (name = "onramp", description = "NGN to cNGN conversion (fiat to crypto)"),
@@ -523,6 +721,10 @@ See the cNGN Integration Guide in `/docs/cngn/` for setup instructions.
         (name = "admin", description = "Administrative endpoints — require admin authentication"),
         (name = "transparency", description = "Public Proof-of-Reserves data feed for aggregators"),
         (name = "partner", description = "Partner Integration Framework — self-service onboarding, credential management, and API versioning"),
+        (name = "developer", description = "Developer self-service endpoints (API key issuance and management)"),
+        (name = "mint", description = "cNGN mint request submission and multi-party approval"),
+        (name = "analytics", description = "Consumer and admin transaction analytics, spending insights, and behavioural risk data"),
+        (name = "webhooks", description = "Inbound payment-provider and corridor webhook receivers"),
     ),
     modifiers(&SecurityAddon),
     servers(

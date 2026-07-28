@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::{error, info, warn};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::api_keys::{
@@ -41,7 +42,7 @@ pub struct DeveloperKeysState {
 
 // ─── Request / Response ───────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct SelfServiceIssueRequest {
     /// Consumer ID the developer is issuing a key for (must be their own).
     pub consumer_id: String,
@@ -51,7 +52,8 @@ pub struct SelfServiceIssueRequest {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = DeveloperIssueKeyResponse)]
 pub struct IssueKeyResponse {
     pub key_id: String,
     pub consumer_id: String,
@@ -67,7 +69,8 @@ pub struct IssueKeyResponse {
     pub security_notice: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = DeveloperKeySummary)]
 pub struct KeySummary {
     pub key_id: String,
     pub consumer_id: String,
@@ -81,7 +84,7 @@ pub struct KeySummary {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 struct ErrorBody {
     code: String,
     message: String,
@@ -104,6 +107,23 @@ fn err(status: StatusCode, code: &str, msg: impl Into<String>) -> Response {
 ///
 /// Authenticated developer issues a key for their own consumer record.
 /// The JWT `sub` (wallet address) is used as the issuing identity.
+#[utoipa::path(
+    post,
+    path = "/api/developer/keys",
+    tag = "developer",
+    summary = "Issue a developer API key",
+    description = "Issues a new API key for a consumer record owned by the authenticated developer. The plaintext key is returned exactly once.",
+    request_body = SelfServiceIssueRequest,
+    responses(
+        (status = 201, description = "Key issued successfully", body = IssueKeyResponse),
+        (status = 400, description = "Invalid consumer_id or environment", body = ErrorBody),
+        (status = 403, description = "Consumer is not owned by the authenticated developer", body = ErrorBody),
+        (status = 404, description = "Consumer not found", body = ErrorBody),
+        (status = 422, description = "Maximum active keys reached", body = ErrorBody),
+        (status = 500, description = "Internal server error", body = ErrorBody)
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn issue_key(
     State(state): State<DeveloperKeysState>,
     Extension(claims): Extension<TokenClaims>,
@@ -268,6 +288,23 @@ pub async fn issue_key(
 }
 
 /// GET /api/developer/keys?consumer_id=<uuid>
+#[utoipa::path(
+    get,
+    path = "/api/developer/keys",
+    tag = "developer",
+    summary = "List developer API keys",
+    description = "Lists API keys for a consumer record owned by the authenticated developer.",
+    params(
+        ("consumer_id" = String, Query, description = "Consumer ID to list keys for (must be owned by the caller)")
+    ),
+    responses(
+        (status = 200, description = "List of keys", body = Vec<KeySummary>),
+        (status = 400, description = "Missing consumer_id query param", body = ErrorBody),
+        (status = 403, description = "Consumer not found or not owned by caller", body = ErrorBody),
+        (status = 500, description = "Internal server error", body = ErrorBody)
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn list_keys(
     State(state): State<DeveloperKeysState>,
     Extension(claims): Extension<TokenClaims>,
@@ -347,6 +384,25 @@ pub async fn list_keys(
 }
 
 /// DELETE /api/developer/keys/:key_id?consumer_id=<uuid>
+#[utoipa::path(
+    delete,
+    path = "/api/developer/keys/{key_id}",
+    tag = "developer",
+    summary = "Revoke a developer API key",
+    description = "Revokes an API key belonging to a consumer record owned by the authenticated developer.",
+    params(
+        ("key_id" = Uuid, Path, description = "Key ID to revoke"),
+        ("consumer_id" = String, Query, description = "Consumer ID that owns the key")
+    ),
+    responses(
+        (status = 200, description = "Key revoked", body = KeySummary),
+        (status = 400, description = "Missing consumer_id query param", body = ErrorBody),
+        (status = 403, description = "Consumer not found or not owned by caller", body = ErrorBody),
+        (status = 404, description = "Key not found", body = ErrorBody),
+        (status = 500, description = "Internal server error", body = ErrorBody)
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn revoke_key(
     State(state): State<DeveloperKeysState>,
     Extension(claims): Extension<TokenClaims>,

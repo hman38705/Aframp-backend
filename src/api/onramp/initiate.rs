@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{error, info, warn};
+use utoipa::ToSchema;
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -35,7 +36,7 @@ pub struct OnrampInitiateState {
 
 // ── Request / Response ────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct InitiateOnrampRequest {
     pub quote_id: String,
     pub wallet_address: String,
@@ -47,7 +48,7 @@ pub struct InitiateOnrampRequest {
     pub idempotency_key: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct InitiateOnrampResponse {
     pub transaction_id: String,
     pub status: String,
@@ -55,14 +56,14 @@ pub struct InitiateOnrampResponse {
     pub quote_summary: QuoteSummary,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct PaymentInstructions {
     pub provider: String,
     pub payment_url: Option<String>,
     pub provider_reference: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct QuoteSummary {
     pub quote_id: String,
     pub amount_ngn: String,
@@ -73,6 +74,23 @@ pub struct QuoteSummary {
 // ── Handler ───────────────────────────────────────────────────────────────────
 
 /// POST /api/onramp/initiate
+#[utoipa::path(
+    post,
+    path = "/api/onramp/initiate",
+    tag = "onramp",
+    summary = "Initiate an onramp transaction",
+    description = "Create a pending onramp transaction from a previously issued quote (see POST /api/onramp/quote) and route the payment through the configured provider. Verifies the destination wallet has an active cNGN trustline and sufficient XLM reserve before proceeding. Safe to retry with the same `idempotency_key` — a duplicate request returns the original transaction instead of creating a new one.",
+    request_body = InitiateOnrampRequest,
+    responses(
+        (status = 200, description = "Transaction initiated (or existing transaction returned for a duplicate idempotency key)", body = InitiateOnrampResponse),
+        (status = 400, description = "Invalid request (missing quote_id or malformed wallet address)"),
+        (status = 404, description = "Quote or transaction not found"),
+        (status = 410, description = "Quote has expired"),
+        (status = 422, description = "Wallet is missing a cNGN trustline or has insufficient XLM reserve"),
+        (status = 500, description = "Internal server error"),
+        (status = 503, description = "Service temporarily unavailable (circuit breaker open)")
+    )
+)]
 pub async fn initiate_onramp(
     State(state): State<Arc<OnrampInitiateState>>,
     Json(req): Json<InitiateOnrampRequest>,

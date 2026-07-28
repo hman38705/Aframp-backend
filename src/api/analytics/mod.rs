@@ -91,6 +91,27 @@ fn internal_err(msg: &str) -> Response {
 // Handlers
 // ---------------------------------------------------------------------------
 
+#[utoipa::path(
+    get,
+    path = "/api/wallet/{wallet_id}/analytics/summary",
+    tag = "analytics",
+    summary = "Get wallet analytics summary",
+    description = "Get a summary of transaction activity for a wallet over the requested time range, including period-over-period deltas",
+    params(
+        ("wallet_id" = String, Path, description = "Wallet address"),
+        ("range" = Option<TimeRange>, Query, description = "Predefined time range"),
+        ("from" = Option<String>, Query, description = "Custom range start (ISO-8601), used when range=custom"),
+        ("to" = Option<String>, Query, description = "Custom range end (ISO-8601), used when range=custom")
+    ),
+    responses(
+        (status = 200, description = "Summary retrieved", body = AnalyticsSummaryResponse),
+        (status = 404, description = "No analytics data found for this wallet"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("bearer_auth" = [])
+    )
+)]
 pub async fn get_summary(
     State(state): State<Arc<AnalyticsState>>,
     Path(wallet_id): Path<String>,
@@ -149,6 +170,26 @@ pub async fn get_summary(
         .into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/wallet/{wallet_id}/analytics/spending",
+    tag = "analytics",
+    summary = "Get wallet spending breakdown",
+    description = "Get a breakdown of wallet spending by category for the requested time range",
+    params(
+        ("wallet_id" = String, Path, description = "Wallet address"),
+        ("range" = Option<TimeRange>, Query, description = "Predefined time range"),
+        ("from" = Option<String>, Query, description = "Custom range start (ISO-8601), used when range=custom"),
+        ("to" = Option<String>, Query, description = "Custom range end (ISO-8601), used when range=custom")
+    ),
+    responses(
+        (status = 200, description = "Spending breakdown retrieved", body = SpendingBreakdownResponse),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("bearer_auth" = [])
+    )
+)]
 pub async fn get_spending(
     State(state): State<Arc<AnalyticsState>>,
     Path(wallet_id): Path<String>,
@@ -187,6 +228,27 @@ pub async fn get_spending(
         .into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/wallet/{wallet_id}/analytics/trends",
+    tag = "analytics",
+    summary = "Get wallet transaction trends",
+    description = "Get a time series of transaction count and cNGN volume for a wallet at the requested granularity",
+    params(
+        ("wallet_id" = String, Path, description = "Wallet address"),
+        ("range" = Option<TimeRange>, Query, description = "Predefined time range"),
+        ("granularity" = Option<Granularity>, Query, description = "Data point granularity (daily|weekly|monthly)"),
+        ("from" = Option<String>, Query, description = "Custom range start (ISO-8601), used when range=custom"),
+        ("to" = Option<String>, Query, description = "Custom range end (ISO-8601), used when range=custom")
+    ),
+    responses(
+        (status = 200, description = "Trends retrieved", body = TrendsResponse),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("bearer_auth" = [])
+    )
+)]
 pub async fn get_trends(
     State(state): State<Arc<AnalyticsState>>,
     Path(wallet_id): Path<String>,
@@ -225,6 +287,23 @@ pub async fn get_trends(
         .into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/wallet/{wallet_id}/analytics/counterparties",
+    tag = "analytics",
+    summary = "Get top counterparties",
+    description = "Get the top counterparties a wallet has transacted with",
+    params(
+        ("wallet_id" = String, Path, description = "Wallet address")
+    ),
+    responses(
+        (status = 200, description = "Counterparties retrieved", body = CounterpartiesResponse),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("bearer_auth" = [])
+    )
+)]
 pub async fn get_counterparties(
     State(state): State<Arc<AnalyticsState>>,
     Path(wallet_id): Path<String>,
@@ -256,6 +335,26 @@ pub async fn get_counterparties(
         .into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/wallet/{wallet_id}/analytics/providers",
+    tag = "analytics",
+    summary = "Get provider usage breakdown",
+    description = "Get a breakdown of payment provider usage for a wallet over the requested time range",
+    params(
+        ("wallet_id" = String, Path, description = "Wallet address"),
+        ("range" = Option<TimeRange>, Query, description = "Predefined time range"),
+        ("from" = Option<String>, Query, description = "Custom range start (ISO-8601), used when range=custom"),
+        ("to" = Option<String>, Query, description = "Custom range end (ISO-8601), used when range=custom")
+    ),
+    responses(
+        (status = 200, description = "Provider usage retrieved", body = ProvidersResponse),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("bearer_auth" = [])
+    )
+)]
 pub async fn get_providers(
     State(state): State<Arc<AnalyticsState>>,
     Path(wallet_id): Path<String>,
@@ -301,6 +400,23 @@ pub async fn get_providers(
         .into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/wallet/{wallet_id}/analytics/insights",
+    tag = "analytics",
+    summary = "Get wallet insights",
+    description = "Get the most recent generated insights (spending highlights, trends, anomalies) for a wallet",
+    params(
+        ("wallet_id" = String, Path, description = "Wallet address")
+    ),
+    responses(
+        (status = 200, description = "Insights retrieved", body = Vec<InsightResponse>),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("bearer_auth" = [])
+    )
+)]
 pub async fn get_insights(
     State(state): State<Arc<AnalyticsState>>,
     Path(wallet_id): Path<String>,
@@ -331,6 +447,23 @@ pub async fn get_insights(
     (StatusCode::OK, Json(items)).into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/wallet/{wallet_id}/analytics/insights/preferences",
+    tag = "analytics",
+    summary = "Get insight notification preferences",
+    description = "Get the weekly/monthly insight notification preferences for a wallet",
+    params(
+        ("wallet_id" = String, Path, description = "Wallet address")
+    ),
+    responses(
+        (status = 200, description = "Preferences retrieved", body = InsightPreferencesResponse),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("bearer_auth" = [])
+    )
+)]
 pub async fn get_insight_preferences(
     State(state): State<Arc<AnalyticsState>>,
     Path(wallet_id): Path<String>,
@@ -352,6 +485,24 @@ pub async fn get_insight_preferences(
         .into_response()
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/wallet/{wallet_id}/analytics/insights/preferences",
+    tag = "analytics",
+    summary = "Update insight notification preferences",
+    description = "Update the weekly/monthly insight notification preferences for a wallet",
+    params(
+        ("wallet_id" = String, Path, description = "Wallet address")
+    ),
+    request_body = InsightPreferencesRequest,
+    responses(
+        (status = 200, description = "Preferences updated", body = InsightPreferencesResponse),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("bearer_auth" = [])
+    )
+)]
 pub async fn update_insight_preferences(
     State(state): State<Arc<AnalyticsState>>,
     Path(wallet_id): Path<String>,
@@ -375,6 +526,24 @@ pub async fn update_insight_preferences(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/wallet/{wallet_id}/analytics/export",
+    tag = "analytics",
+    summary = "Export wallet analytics",
+    description = "Queue an asynchronous export of wallet analytics data for the requested time range and metrics. The caller is notified when the export is ready.",
+    params(
+        ("wallet_id" = String, Path, description = "Wallet address")
+    ),
+    request_body = ExportQuery,
+    responses(
+        (status = 202, description = "Export queued", body = ExportResponse),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("bearer_auth" = [])
+    )
+)]
 pub async fn export_analytics(
     State(_state): State<Arc<AnalyticsState>>,
     Path(wallet_id): Path<String>,

@@ -110,6 +110,22 @@ fn workflow_err_to_response(e: WorkflowError) -> Response {
 ///
 /// Caller must be authenticated (any mint workflow role). Tier is calculated
 /// automatically from `amount_ngn`.
+#[utoipa::path(
+    post,
+    path = "/api/mint/requests",
+    tag = "mint",
+    summary = "Submit a mint request",
+    description = "Submits a new cNGN mint request. The approval tier and number of required approvals are calculated automatically from `amount_ngn`.",
+    request_body = SubmitMintRequest,
+    responses(
+        (status = 201, description = "Mint request submitted", body = SubmitMintResponse),
+        (status = 400, description = "Invalid amount"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Caller lacks a mint workflow role"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn submit_mint_request(
     State(state): State<Arc<MintState>>,
     Extension(caller): Extension<CallerIdentity>,
@@ -184,6 +200,26 @@ pub async fn submit_mint_request(
 ///
 /// Caller's role must be one of the required roles for the request's tier.
 /// Self-approval and duplicate approvals are blocked.
+#[utoipa::path(
+    post,
+    path = "/api/mint/requests/{id}/approve",
+    tag = "mint",
+    summary = "Approve a mint request",
+    description = "Records an approval from the caller. Self-approval and duplicate approvals by the same approver are rejected.",
+    params(
+        ("id" = Uuid, Path, description = "Mint request ID")
+    ),
+    request_body = ApproveMintRequest,
+    responses(
+        (status = 200, description = "Approval recorded", body = MintActionResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Caller's role is not authorized to approve, or self-approval"),
+        (status = 404, description = "Mint request not found"),
+        (status = 409, description = "Invalid state transition or approver already acted"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn approve_mint_request(
     State(state): State<Arc<MintState>>,
     Extension(caller): Extension<CallerIdentity>,
@@ -236,6 +272,27 @@ pub async fn approve_mint_request(
 /// Reject a mint request at any approval stage.
 ///
 /// Immediately transitions to `rejected`. `reason_code` is mandatory.
+#[utoipa::path(
+    post,
+    path = "/api/mint/requests/{id}/reject",
+    tag = "mint",
+    summary = "Reject a mint request",
+    description = "Immediately transitions the mint request to `rejected`. A `reason_code` is mandatory.",
+    params(
+        ("id" = Uuid, Path, description = "Mint request ID")
+    ),
+    request_body = RejectMintRequest,
+    responses(
+        (status = 200, description = "Request rejected", body = MintActionResponse),
+        (status = 400, description = "Missing reason_code"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Caller's role is not authorized to reject"),
+        (status = 404, description = "Mint request not found"),
+        (status = 409, description = "Request already in a terminal state"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn reject_mint_request(
     State(state): State<Arc<MintState>>,
     Extension(caller): Extension<CallerIdentity>,
@@ -283,6 +340,23 @@ pub async fn reject_mint_request(
 // ============================================================================
 
 /// Get full mint request detail including the approval timeline.
+#[utoipa::path(
+    get,
+    path = "/api/mint/requests/{id}",
+    tag = "mint",
+    summary = "Get a mint request",
+    description = "Retrieves full mint request detail, including the approval timeline.",
+    params(
+        ("id" = Uuid, Path, description = "Mint request ID")
+    ),
+    responses(
+        (status = 200, description = "Mint request detail", body = MintRequestDetail),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Mint request not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn get_mint_request(
     State(state): State<Arc<MintState>>,
     Extension(_caller): Extension<CallerIdentity>,
@@ -332,6 +406,24 @@ pub async fn get_mint_request(
 // ============================================================================
 
 /// List mint requests with optional status filter and pagination.
+#[utoipa::path(
+    get,
+    path = "/api/mint/requests",
+    tag = "mint",
+    summary = "List mint requests",
+    description = "Lists mint requests with an optional status filter and pagination.",
+    params(
+        ("status" = Option<String>, Query, description = "Filter by request status"),
+        ("limit" = Option<i64>, Query, description = "Maximum number of records to return (max 100, default 20)"),
+        ("offset" = Option<i64>, Query, description = "Number of records to skip")
+    ),
+    responses(
+        (status = 200, description = "Paginated list of mint requests", body = ListMintRequestsResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn list_mint_requests(
     State(state): State<Arc<MintState>>,
     Extension(_caller): Extension<CallerIdentity>,
@@ -400,6 +492,23 @@ pub async fn list_mint_requests(
 // ============================================================================
 
 /// Return the full immutable audit trail for a mint request.
+#[utoipa::path(
+    get,
+    path = "/api/mint/requests/{id}/audit",
+    tag = "mint",
+    summary = "Get mint request audit trail",
+    description = "Returns the full immutable audit trail for a mint request.",
+    params(
+        ("id" = Uuid, Path, description = "Mint request ID")
+    ),
+    responses(
+        (status = 200, description = "Audit trail", body = Vec<AuditEntry>),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Mint request not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn get_mint_audit(
     State(state): State<Arc<MintState>>,
     Extension(_caller): Extension<CallerIdentity>,

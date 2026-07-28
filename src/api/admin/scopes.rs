@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::{error, info, warn};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 // ─── State ───────────────────────────────────────────────────────────────────
@@ -26,7 +27,7 @@ pub struct ScopesState {
 
 // ─── Models ──────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ScopeRow {
     pub name: String,
     pub description: String,
@@ -34,13 +35,13 @@ pub struct ScopeRow {
     pub applicable_consumer_types: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ScopesListResponse {
     pub scopes: Vec<ScopeRow>,
     pub total: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct KeyScopesResponse {
     pub key_id: Uuid,
     pub consumer_id: Uuid,
@@ -48,18 +49,18 @@ pub struct KeyScopesResponse {
     pub scopes: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateScopesRequest {
     /// Complete list of scopes to assign — replaces all existing scopes for this key.
     pub scopes: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ErrorResponse {
     pub error: ErrorDetail,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ErrorDetail {
     pub code: String,
     pub message: String,
@@ -84,6 +85,18 @@ fn error_response(status: StatusCode, code: &str, message: &str) -> Response {
 ///
 /// Returns the full platform scope catalogue with descriptions and applicable
 /// consumer types. Requires `admin:consumers` scope.
+#[utoipa::path(
+    get,
+    path = "/api/admin/scopes",
+    tag = "admin",
+    summary = "List all platform scopes",
+    description = "Returns the full platform scope catalogue with descriptions and applicable consumer types. Requires `admin:consumers` scope.",
+    responses(
+        (status = 200, description = "Scope catalogue", body = ScopesListResponse),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn list_scopes(State(state): State<ScopesState>) -> Response {
     info!("Admin: listing all platform scopes");
 
@@ -126,6 +139,23 @@ pub async fn list_scopes(State(state): State<ScopesState>) -> Response {
 ///
 /// Returns scopes granted to a specific API key.
 /// Requires `admin:consumers` scope.
+#[utoipa::path(
+    get,
+    path = "/api/admin/consumers/{consumer_id}/keys/{key_id}/scopes",
+    tag = "admin",
+    summary = "Get scopes for an API key",
+    description = "Returns scopes granted to a specific API key. Requires `admin:consumers` scope.",
+    params(
+        ("consumer_id" = Uuid, Path, description = "Consumer ID"),
+        ("key_id" = Uuid, Path, description = "Key ID")
+    ),
+    responses(
+        (status = 200, description = "Key scopes", body = KeyScopesResponse),
+        (status = 404, description = "Key not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn get_key_scopes(
     State(state): State<ScopesState>,
     Path((consumer_id, key_id)): Path<(Uuid, Uuid)>,
@@ -203,6 +233,25 @@ pub async fn get_key_scopes(
 /// Replaces all scope grants for a specific API key.
 /// Enforces that no scope beyond the consumer type's permitted scopes can be granted.
 /// Requires `admin:consumers` scope.
+#[utoipa::path(
+    patch,
+    path = "/api/admin/consumers/{consumer_id}/keys/{key_id}/scopes",
+    tag = "admin",
+    summary = "Replace scopes for an API key",
+    description = "Replaces all scope grants for a specific API key. Enforces that no scope beyond the consumer type's permitted scopes can be granted. Requires `admin:consumers` scope.",
+    params(
+        ("consumer_id" = Uuid, Path, description = "Consumer ID"),
+        ("key_id" = Uuid, Path, description = "Key ID")
+    ),
+    request_body = UpdateScopesRequest,
+    responses(
+        (status = 200, description = "Scopes updated", body = KeyScopesResponse),
+        (status = 403, description = "Requested scopes exceed the consumer type's permitted set", body = ErrorResponse),
+        (status = 404, description = "Key not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn update_key_scopes(
     State(state): State<ScopesState>,
     Path((consumer_id, key_id)): Path<(Uuid, Uuid)>,
