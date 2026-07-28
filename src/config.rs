@@ -15,6 +15,44 @@ pub struct AppConfig {
     /// Distributed tracing configuration (Issue #104 — OpenTelemetry).
     pub telemetry: TelemetryConfig,
     pub kyc: KycConfig,
+    /// Audit middleware configuration (Issue #717 — body-size limit).
+    pub audit: AuditConfig,
+}
+
+// ---------------------------------------------------------------------------
+// AuditConfig  (Issue #717 — body-size limit)
+// ---------------------------------------------------------------------------
+
+/// Configuration for the audit middleware.
+///
+/// | Env var                    | Default     | Description                                          |
+/// |----------------------------|-------------|------------------------------------------------------|
+/// | `AUDIT_BODY_LIMIT_BYTES`   | `1048576`   | Maximum body bytes buffered for SHA-256 hashing.     |
+///   Bodies larger than this limit are not hashed; `request_body_hash` is
+///   recorded as an empty string and the `aframp_audit_body_truncated_total`
+///   Prometheus counter is incremented. The request itself is **not** failed.
+#[derive(Debug, Clone)]
+pub struct AuditConfig {
+    /// Maximum number of bytes to buffer from the request body for hashing.
+    /// Default: 1 MiB (1_048_576 bytes).
+    pub body_limit_bytes: usize,
+}
+
+impl AuditConfig {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        let body_limit_bytes = env::var("AUDIT_BODY_LIMIT_BYTES")
+            .unwrap_or_else(|_| "1048576".to_string())
+            .parse::<usize>()
+            .map_err(|_| ConfigError::InvalidValue("AUDIT_BODY_LIMIT_BYTES".to_string()))?;
+
+        if body_limit_bytes == 0 {
+            return Err(ConfigError::InvalidValue(
+                "AUDIT_BODY_LIMIT_BYTES must be greater than 0".to_string(),
+            ));
+        }
+
+        Ok(AuditConfig { body_limit_bytes })
+    }
 }
 
 /// Server configuration
@@ -207,6 +245,7 @@ impl AppConfig {
             stellar: StellarConfig::from_env()?,
             telemetry: TelemetryConfig::from_env()?,
             kyc: KycConfig::from_env()?,
+            audit: AuditConfig::from_env()?,
         })
     }
 
@@ -218,6 +257,7 @@ impl AppConfig {
         self.stellar.validate()?;
         self.telemetry.validate()?;
         self.kyc.validate()?;
+        // AuditConfig validates at construction; nothing extra to check here.
 
         Ok(())
     }
