@@ -459,6 +459,26 @@ Authorization: Bearer <your_jwt_token>
 
 Your Stellar wallet must have an active cNGN trustline before receiving cNGN.
 See the cNGN Integration Guide in `/docs/cngn/` for setup instructions.
+
+## Rate Limiting
+
+Every response carries your current quota for the endpoint you called:
+
+| Header                | Meaning                                              |
+|------------------------|-------------------------------------------------------|
+| `X-RateLimit-Limit`     | Requests allowed in the current window                |
+| `X-RateLimit-Remaining` | Requests left in the current window                   |
+| `X-RateLimit-Reset`     | Unix timestamp (seconds) when the window resets        |
+| `X-RateLimit-Used`      | Requests already consumed in the current window        |
+
+Exceeding the limit returns `429 Too Many Requests` with an additional
+`Retry-After` header (seconds until the window resets).
+
+Endpoints are grouped into sensitivity tiers, each with its own default
+per-IP ceiling (requests/minute): `CRITICAL` (10) for fund-movement
+endpoints such as mint and redemption, `FINANCIAL` (60) for onramp/offramp
+initiation, `STANDARD` (300) for general authenticated endpoints, and
+`PUBLIC` (1000) for read-only endpoints such as `/api/rates`.
 ",
         contact(name = "Aframp Engineering"),
         license(name = "Proprietary")
