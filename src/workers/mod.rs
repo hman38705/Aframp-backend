@@ -23,5 +23,6 @@ pub mod stellar_submitter_worker;
 pub mod supply_monitor_worker;
 pub mod transaction_monitor;
 pub mod webhook_retry;
+pub mod partition_maintenance_worker;
 pub mod payment_reconciliation_worker;
 pub mod supervisor;

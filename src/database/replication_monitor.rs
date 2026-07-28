@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::PgPool;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::database::metrics as db_metrics;
 
@@ -85,7 +85,16 @@ impl ReplicationMonitor {
                 self.inner.breaker_open.store(false, Ordering::Relaxed);
             }
             Err(e) => {
-                warn!(replica=%self.inner.replica_label, "Replication lag query failed: {e}");
+                // pg_stat_replication only exists on the primary. If this monitor is
+                // pointed at a replica (or the query fails for any other reason), we
+                // cannot verify lag is within bounds — fail safe by opening the
+                // breaker instead of silently keeping the last-known (possibly
+                // healthy) state, which would give a false healthy signal.
+                self.inner.breaker_open.store(true, Ordering::Relaxed);
+                error!(
+                    replica=%self.inner.replica_label,
+                    "Replication lag query failed — opening circuit breaker (fail-safe): {e}"
+                );
             }
         }
     }
