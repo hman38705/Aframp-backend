@@ -68,12 +68,37 @@ pub static RATE_LIMIT_429_RESPONSES: Lazy<IntCounterVec> = Lazy::new(|| {
     .unwrap()
 });
 
+/// Times the rate limiter fell back to fail-open because Redis was
+/// unreachable or the sliding-window Lua script errored (Issue #727).
+/// A sustained non-zero rate here means rate limiting is effectively
+/// disabled and should page — the labelled `reason` distinguishes a
+/// connection-pool exhaustion/outage from a script-level failure.
+pub static RATE_LIMIT_REDIS_FALLBACK: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        REGISTRY,
+        Opts::new(
+            "aframp_rate_limit_redis_fallback_total",
+            "Requests allowed through without a rate-limit check because Redis was unavailable"
+        )
+        .namespace("aframp")
+        .subsystem("rate_limit"),
+        &["reason"]
+    )
+    .unwrap()
+});
+
 pub fn init_metrics() {
     // Called on startup - ensures all metrics registered
     let _ = *RATE_LIMIT_CHECKS;
     let _ = *RATE_LIMIT_HITS;
     let _ = *RATE_LIMIT_UTILISATION;
     let _ = *RATE_LIMIT_429_RESPONSES;
+    let _ = *RATE_LIMIT_REDIS_FALLBACK;
+}
+
+/// Record a fail-open fallback (Redis unavailable or script error).
+pub fn record_redis_fallback(reason: &str) {
+    RATE_LIMIT_REDIS_FALLBACK.with_label_values(&[reason]).inc();
 }
 
 /// Record a rate limit check

@@ -1723,6 +1723,13 @@ async fn main() -> anyhow::Result<()> {
         let ip_reputation_state = api::admin::ip_reputation::IpReputationState {
             repo: database::ip_reputation_repository::IpReputationRepository::new(pool.clone()),
         };
+        let rate_limit_admin_state = api::admin::rate_limits::RateLimitAdminState {
+            repo: std::sync::Arc::new(
+                database::consumer_rate_limit_repository::ConsumerRateLimitRepository::new(
+                    std::sync::Arc::new(pool.clone()),
+                ),
+            ),
+        };
         Router::new()
 
         // ── Revocation & Blacklist routes (Issue #138) ────────────────────────
@@ -1790,6 +1797,20 @@ async fn main() -> anyhow::Result<()> {
                         post(api::admin::ip_reputation::whitelist_ip),
                     )
                     .with_state(ip_reputation_state),
+            )
+            .merge(
+                Router::new()
+                    // Issue #175 / #725 — per-consumer rate limit overrides
+                    .route(
+                        "/api/admin/consumers/{consumer_id}/rate-limits",
+                        get(api::admin::rate_limits::get_consumer_rate_limits)
+                            .post(api::admin::rate_limits::create_consumer_rate_limit_override),
+                    )
+                    .route(
+                        "/api/admin/consumers/{consumer_id}/rate-limits/{override_id}",
+                        delete(api::admin::rate_limits::delete_consumer_rate_limit_override),
+                    )
+                    .with_state(rate_limit_admin_state),
             )
     } else {
         info!("Skipping admin routes (no database)");
@@ -2543,7 +2564,9 @@ async fn main() -> anyhow::Result<()> {
             default: crate::middleware::rate_limit::EndpointLimits {
                 per_ip: Some(crate::middleware::rate_limit::LimitConfig { limit: 100, window: 60 }),
                 per_wallet: None,
-            }
+                tier: None,
+            },
+            tiers: std::collections::HashMap::new(),
         }
     }));
 
@@ -2552,6 +2575,14 @@ async fn main() -> anyhow::Result<()> {
         let rate_limit_state = crate::middleware::rate_limit::RateLimitState {
             cache: std::sync::Arc::new(cache.clone()),
             config: rate_limit_config,
+            consumer_repo: db_pool.clone().map(|pool| {
+                std::sync::Arc::new(
+                    crate::database::consumer_rate_limit_repository::ConsumerRateLimitRepository::new(
+                        std::sync::Arc::new(pool),
+                    ),
+                )
+            }),
+            db_pool: db_pool.clone().map(std::sync::Arc::new),
         };
 
         let replay_state = crate::middleware::replay_prevention::ReplayPreventionState {

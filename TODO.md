@@ -6,30 +6,29 @@
   - [x] Create `consumer_rate_limit_overrides` table
 [x] Add migration + run `fix-migrations.sh`
 - [x] 2. Database Repository (`src/database/consumer_rate_limit_repository.rs`)
-- [ ] 3. Extend Rate Limit Middleware (`src/middleware/rate_limit.rs`)
-  - [ ] Extract `AuthenticatedKey` consumer_id/type
-  - [ ] Multi-dimension keys (global/endpoint/tx-type/IP)
-  - [ ] Lua scripts: Sliding window + Token Bucket
-  - [ ] Endpoint sensitivity tiers
-  - [ ] Profile + override merging
-- [ ] 4. Admin Rate Limit Endpoints (`src/api/admin/rate_limits.rs`)
-  - [ ] GET/POST/DELETE `/api/admin/consumers/:id/rate-limits`
-- [ ] 5. Metrics & Logging (`src/middleware/rate_limit_metrics.rs`)
-  - [ ] Prometheus: checks/hits/utilisation
-  - [ ] Breach logs/alerts
-- [ ] 6. Update Config (`rate_limits.yaml`)
-- [ ] 7. Integration Tests (`tests/advanced_rate_limit_test.rs`)
-- [ ] 8. Route Wiring (`src/main.rs`, `src/routes/`)
+- [x] 3. Extend Rate Limit Middleware (`src/middleware/rate_limit.rs`)
+  - [x] Extract `AuthenticatedKey` consumer_id/type (via `middleware::api_key::resolve_api_key`)
+  - [x] Multi-dimension keys (global/endpoint/tx-type/IP)
+  - [x] Lua script: atomic sliding window check-and-increment (token-bucket-equivalent via limit/window; see #727)
+  - [x] Endpoint sensitivity tiers (see #726)
+  - [x] Profile + override merging (via `get_effective_rate_limits` SQL function)
+- [x] 4. Admin Rate Limit Endpoints (`src/api/admin/rate_limits.rs`)
+  - [x] GET/POST/DELETE `/api/admin/consumers/:id/rate-limits`
+- [x] 5. Metrics & Logging (`src/middleware/rate_limit_metrics.rs`)
+  - [x] Prometheus: checks/hits/utilisation (wired into the per-dimension consumer check)
+  - [x] Breach logs/alerts (`record_hit`/`record_429` + `warn!` on breach)
+- [x] 6. Update Config (`rate_limits.yaml`)
+- [x] 7. Integration Tests (`tests/advanced_rate_limit_test.rs`)
+- [x] 8. Route Wiring (`src/main.rs`)
 - [ ] 9. Verification
   - [ ] `cargo test`
   - [ ] `cargo check`
   - [ ] Manual test concurrent requests
 - [ ] 10. Git Branch/PR
-  - [ ] `git checkout -b blackboxai/rate-limiting-175`
   - [ ] Commit changes
-  - [ ] `gh pr create --title "Fix #175: Advanced Per-Consumer Rate Limiting"`
+  - [ ] Open PR
 
-**Current Step: 1/10**
+**Current Step: 8/10 — steps 3-8 implemented across #725/#726/#727/#728; verification (9) and PR (10) pending.**
 # Third-Party Security Audit Framework Implementation TODO
 
 Current Status: [In Progress]  

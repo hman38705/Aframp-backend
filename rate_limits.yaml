@@ -8,73 +8,126 @@
 #   per_wallet:
 #     limit: <number>
 #     window: <seconds>
+#   tier: <CRITICAL|FINANCIAL|STANDARD|PUBLIC>   # optional — used as the
+#     per_ip fallback whenever per_ip is not set explicitly above (Issue #726)
+
+# Per-consumer overrides (Issue #175 / #725): authenticated API-key callers
+# with a `consumer_rate_limit_profiles` row (by consumer_type) or an active
+# `consumer_rate_limit_overrides` row are checked against that DB-backed
+# profile *in addition to* the static limits below, across the "global",
+# "endpoint_critical" / "endpoint_elevated" / "endpoint_standard", "tx_*",
+# and "ip" dimensions. See src/middleware/rate_limit.rs and
+# src/api/admin/rate_limits.rs (admin CRUD for overrides). This file remains
+# the source of truth for unauthenticated / non-API-key traffic.
+
+# Endpoint sensitivity tiers — coarse-grained default limits applied by
+# `tier:` when an endpoint doesn't define its own per_ip limit. Values are
+# requests per window (see acceptance criteria in Issue #726).
+tiers:
+  CRITICAL:
+    limit: 10
+    window: 60
+  FINANCIAL:
+    limit: 60
+    window: 60
+  STANDARD:
+    limit: 300
+    window: 60
+  PUBLIC:
+    limit: 1000
+    window: 60
 
 endpoints:
+  "/api/mint":
+    tier: CRITICAL
+    per_wallet:
+      limit: 5
+      window: 3600
+
+  "/api/redemption":
+    tier: CRITICAL
+    per_wallet:
+      limit: 5
+      window: 3600
+
   "/api/onramp/initiate":
+    tier: FINANCIAL
     per_wallet:
       limit: 5
       window: 3600
 
   "/api/offramp/initiate":
+    tier: FINANCIAL
     per_wallet:
       limit: 5
       window: 3600
 
   "/api/bills/pay":
+    tier: FINANCIAL
     per_wallet:
       limit: 20
       window: 3600
 
   "/api/wallet/balance":
+    tier: STANDARD
     per_wallet:
       limit: 200
       window: 3600
 
   "/api/onramp/status":
+    tier: STANDARD
     per_wallet:
       limit: 100
       window: 3600
 
   "/api/auth/verify":
+    tier: FINANCIAL
     per_wallet:
       limit: 5
       window: 60
 
   "/api/auth/challenge":
+    tier: STANDARD
     per_ip:
       limit: 10
       window: 60
 
   "/api/onramp/quote":
+    tier: STANDARD
     per_ip:
       limit: 30
       window: 60
     per_wallet:
       limit: 10
       window: 3600
-      
+
   "/api/offramp/quote":
+    tier: STANDARD
     per_wallet:
       limit: 10
       window: 3600
 
   "/api/rates":
+    tier: PUBLIC
     per_ip:
       limit: 100
       window: 60
 
   "/api/fees":
+    tier: PUBLIC
     per_ip:
       limit: 100
       window: 60
 
   "/api/bills/providers":
+    tier: PUBLIC
     per_ip:
       limit: 50
       window: 60
 
 # Default limits applied when no specific endpoint matches
 default:
+  tier: STANDARD
   per_ip:
     limit: 100
     window: 60
