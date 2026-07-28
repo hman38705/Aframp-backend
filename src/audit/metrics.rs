@@ -9,6 +9,9 @@ static AUDIT_WRITER_CHANNEL_UTILISATION: OnceLock<Gauge> = OnceLock::new();
 static AUDIT_HASH_CHAIN_DURATION_SECONDS: OnceLock<HistogramVec> = OnceLock::new();
 static AUDIT_REPLICATION_LAG_SECONDS: OnceLock<Gauge> = OnceLock::new();
 static AUDIT_OVERFLOW_FALLBACKS_TOTAL: OnceLock<CounterVec> = OnceLock::new();
+/// Incremented each time a request body exceeds the configured limit and is
+/// skipped for hashing. Labels: `reason` ("too_large").
+static AUDIT_BODY_TRUNCATED_TOTAL: OnceLock<CounterVec> = OnceLock::new();
 
 pub fn entries_total() -> anyhow::Result<&'static CounterVec> {
     AUDIT_ENTRIES_TOTAL
@@ -36,6 +39,13 @@ pub fn replication_lag_seconds() -> anyhow::Result<&'static Gauge> {
 
 pub fn overflow_fallbacks_total() -> anyhow::Result<&'static CounterVec> {
     AUDIT_OVERFLOW_FALLBACKS_TOTAL
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("audit metrics not initialised"))
+}
+
+/// Counter for bodies that exceeded the configured limit and were skipped for hashing.
+pub fn body_truncated_total() -> anyhow::Result<&'static CounterVec> {
+    AUDIT_BODY_TRUNCATED_TOTAL
         .get()
         .ok_or_else(|| anyhow::anyhow!("audit metrics not initialised"))
 }
@@ -93,6 +103,18 @@ pub fn register(r: &Registry) {
             register_counter_vec_with_registry!(
                 "aframp_audit_overflow_fallbacks_total",
                 "Times the audit writer fell back to synchronous writes due to channel overflow",
+                &["reason"],
+                r
+            )
+            .unwrap(),
+        )
+        .ok();
+
+    AUDIT_BODY_TRUNCATED_TOTAL
+        .set(
+            register_counter_vec_with_registry!(
+                "aframp_audit_body_truncated_total",
+                "Request bodies skipped for audit hashing because they exceeded the configured size limit",
                 &["reason"],
                 r
             )

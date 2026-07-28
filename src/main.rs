@@ -2713,7 +2713,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Inject audit writer as an Axum extension so the middleware can access it
     let app = if let Some(ref writer) = audit_writer {
-        app.layer(axum::Extension(writer.clone()))
+        let audit_cfg = Arc::new(config.audit.clone());
+        app.layer(axum::Extension(audit_cfg))
+            .layer(axum::Extension(writer.clone()))
             .layer(axum::middleware::from_fn(audit::middleware::audit_middleware))
     } else {
         app
