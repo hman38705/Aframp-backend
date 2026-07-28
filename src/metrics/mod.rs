@@ -375,6 +375,8 @@ pub mod stellar {
     static STELLAR_TX_SUBMISSIONS_TOTAL: OnceLock<CounterVec> = OnceLock::new();
     static STELLAR_TX_SUBMISSION_DURATION_SECONDS: OnceLock<HistogramVec> = OnceLock::new();
     static STELLAR_TRUSTLINE_ATTEMPTS_TOTAL: OnceLock<CounterVec> = OnceLock::new();
+    static STELLAR_QUEUE_DEPTH: OnceLock<Gauge> = OnceLock::new();
+    static STELLAR_QUEUE_TIMEOUT_TOTAL: OnceLock<CounterVec> = OnceLock::new();
 
     pub fn tx_submissions_total() -> &'static CounterVec {
         STELLAR_TX_SUBMISSIONS_TOTAL
@@ -390,6 +392,20 @@ pub mod stellar {
 
     pub fn trustline_attempts_total() -> &'static CounterVec {
         STELLAR_TRUSTLINE_ATTEMPTS_TOTAL
+            .get()
+            .expect("metrics not initialised")
+    }
+
+    /// Number of submissions currently waiting in the channel pool's bounded
+    /// backpressure queue for a channel slot.
+    pub fn queue_depth() -> &'static Gauge {
+        STELLAR_QUEUE_DEPTH.get().expect("metrics not initialised")
+    }
+
+    /// Total submissions rejected because they waited longer than the queue
+    /// timeout for a channel slot.
+    pub fn queue_timeout_total() -> &'static CounterVec {
+        STELLAR_QUEUE_TIMEOUT_TOTAL
             .get()
             .expect("metrics not initialised")
     }
@@ -431,6 +447,29 @@ pub mod stellar {
                 .unwrap(),
             )
             .ok();
+
+        STELLAR_QUEUE_DEPTH
+            .set(
+                register_gauge_with_registry!(
+                    "aframp_stellar_queue_depth",
+                    "Submissions currently waiting in the channel pool's backpressure queue",
+                    r
+                )
+                .unwrap(),
+            )
+            .ok();
+
+        STELLAR_QUEUE_TIMEOUT_TOTAL
+            .set(
+                register_counter_vec_with_registry!(
+                    "aframp_stellar_queue_timeout_total",
+                    "Total submissions rejected after exceeding the queue timeout waiting for a channel slot",
+                    &[],
+                    r
+                )
+                .unwrap(),
+            )
+            .ok();
     }
 }
 
@@ -443,6 +482,7 @@ pub mod stellar_horizon {
 
     static HORIZON_ENDPOINT_SUCCESS_RATE: OnceLock<GaugeVec> = OnceLock::new();
     static HORIZON_ENDPOINT_HEALTHY: OnceLock<GaugeVec> = OnceLock::new();
+    static HORIZON_ACTIVE_CONNECTIONS: OnceLock<Gauge> = OnceLock::new();
 
     /// EWMA success rate (0.0-1.0) per Horizon/RPC endpoint.
     pub fn endpoint_success_rate() -> &'static GaugeVec {
@@ -454,6 +494,14 @@ pub mod stellar_horizon {
     /// Whether an endpoint is currently in rotation (1) or circuit-broken out (0).
     pub fn endpoint_healthy() -> &'static GaugeVec {
         HORIZON_ENDPOINT_HEALTHY
+            .get()
+            .expect("metrics not initialised")
+    }
+
+    /// Number of in-flight HTTP requests currently held by the Horizon client's
+    /// connection pool, across all endpoints.
+    pub fn active_connections() -> &'static Gauge {
+        HORIZON_ACTIVE_CONNECTIONS
             .get()
             .expect("metrics not initialised")
     }
@@ -477,6 +525,17 @@ pub mod stellar_horizon {
                     "aframp_horizon_endpoint_healthy",
                     "Whether a Horizon/RPC endpoint is in rotation (1) or circuit-broken out (0)",
                     &["endpoint"],
+                    r
+                )
+                .unwrap(),
+            )
+            .ok();
+
+        HORIZON_ACTIVE_CONNECTIONS
+            .set(
+                register_gauge_with_registry!(
+                    "aframp_horizon_active_connections",
+                    "In-flight HTTP requests currently held by the Horizon client connection pool",
                     r
                 )
                 .unwrap(),
@@ -1088,10 +1147,55 @@ fn register_all(r: &Registry) {
     por::register(r);
     #[cfg(feature = "database")]
     crate::analytics::metrics::register(r);
-    crate::adaptive_rate_limit::metrics::register(r);
-    crate::security_compliance::metrics::register(r);
     crate::liquidity::metrics::register(r);
     crate::travel_rule::metrics::register(r);
+    spawn::register(r);
+}
+
+// ---------------------------------------------------------------------------
+// Spawned-task error counter — issue #793
+// ---------------------------------------------------------------------------
+
+/// Metrics for tracking unhandled errors from fire-and-forget `tokio::spawn` tasks.
+///
+/// Provides `aframp_spawn_error_total{task_name}` — a counter that is incremented
+/// whenever a spawned task panics or returns a `JoinError`. Use the helper
+/// [`spawn::inc_error`] instead of calling Prometheus directly.
+pub mod spawn {
+    use super::*;
+
+    static SPAWN_ERROR_TOTAL: OnceLock<CounterVec> = OnceLock::new();
+
+    pub fn register(r: &Registry) {
+        let counter = register_counter_vec_with_registry!(
+            "aframp_spawn_error_total",
+            "Total number of errors (panics or JoinError) from fire-and-forget spawned tasks",
+            &["task_name"],
+            r
+        )
+        .expect("failed to register aframp_spawn_error_total");
+        let _ = SPAWN_ERROR_TOTAL.set(counter);
+    }
+
+    /// Increment the spawn error counter for the given `task_name`.
+    ///
+    /// Call this from the JoinHandle await path or inside a `catch_unwind` wrapper.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use crate::metrics::spawn as spawn_metrics;
+    ///
+    /// let handle = tokio::spawn(async move { /* work */ });
+    /// if let Err(err) = handle.await {
+    ///     spawn_metrics::inc_error("audit_log");
+    ///     tracing::error!(task = "audit_log", error = %err, "spawned task failed");
+    /// }
+    /// ```
+    pub fn inc_error(task_name: &str) {
+        if let Some(c) = SPAWN_ERROR_TOTAL.get() {
+            c.with_label_values(&[task_name]).inc();
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

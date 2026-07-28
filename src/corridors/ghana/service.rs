@@ -1,6 +1,5 @@
 //! Ghana corridor service — orchestrates the full NG→GH transfer flow.
 
-// REMOVED: use crate::compliance_registry::repository::ComplianceRegistryRepository;
 use crate::corridors::ghana::models::*;
 use crate::payments::provider::PaymentProvider;
 use crate::payments::providers::ghana::{
@@ -54,7 +53,6 @@ pub enum GhanaCorridorError {
 
 pub struct GhanaCorridorService {
     pool: PgPool,
-    compliance_repo: Arc<ComplianceRegistryRepository>,
     exchange_rate_svc: Arc<ExchangeRateService>,
     #[allow(dead_code)]
     fee_svc: Arc<FeeCalculationService>,
@@ -65,7 +63,6 @@ pub struct GhanaCorridorService {
 impl GhanaCorridorService {
     pub fn new(
         pool: PgPool,
-        compliance_repo: Arc<ComplianceRegistryRepository>,
         exchange_rate_svc: Arc<ExchangeRateService>,
         fee_svc: Arc<FeeCalculationService>,
         provider_config: GhanaProviderConfig,
@@ -73,7 +70,6 @@ impl GhanaCorridorService {
     ) -> Self {
         Self {
             pool,
-            compliance_repo,
             exchange_rate_svc,
             fee_svc,
             provider_config,

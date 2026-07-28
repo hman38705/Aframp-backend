@@ -8,6 +8,7 @@ use crate::audit::{
     redaction::sha256_hex,
     writer::AuditWriter,
 };
+use crate::metrics::spawn as spawn_metrics;
 use axum::{
     body::{to_bytes, Body},
     extract::{MatchedPath, Request},
@@ -255,10 +256,23 @@ pub async fn audit_middleware(
         environment,
     };
 
-    // Fire-and-forget — does not block the response
+    // Fire-and-forget — does not block the response.
+    // Issue #793: save the JoinHandle and log any JoinError so task failures
+    // are never silently dropped. The `aframp_spawn_error_total{task_name="audit_log"}`
+    // counter is incremented on failure so it is visible in dashboards/alerts.
     let w = writer.0.clone();
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         w.write(pending).await;
+    });
+    tokio::spawn(async move {
+        if let Err(join_err) = handle.await {
+            spawn_metrics::inc_error("audit_log");
+            tracing::error!(
+                task = "audit_log",
+                error = %join_err,
+                "audit log spawned task failed (JoinError) — entry may be lost"
+            );
+        }
     });
 
     response

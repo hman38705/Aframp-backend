@@ -20,6 +20,11 @@ const UNHEALTHY_THRESHOLD: f64 = 0.5;
 const RECOVERY_THRESHOLD: f64 = 0.8;
 /// How often the background prober re-checks circuit-broken endpoints.
 const RECOVERY_PROBE_INTERVAL: Duration = Duration::from_secs(30);
+/// Consecutive Horizon *timeouts* (not just any failure) above which an
+/// endpoint is circuit-broken immediately, bypassing the slower
+/// EWMA/`MIN_SAMPLES_BEFORE_TRIP` gate — a run of timeouts means the
+/// endpoint is unresponsive right now and should stop taking traffic fast.
+const TIMEOUT_CIRCUIT_THRESHOLD: u32 = 3;
 
 /// Per-endpoint health tracking state.
 struct EndpointHealthState {
@@ -30,6 +35,9 @@ struct EndpointHealthState {
     samples: u32,
     healthy: bool,
     consecutive_failures: u32,
+    /// Consecutive request *timeouts* — reset on any success or any
+    /// non-timeout failure, since it tracks a pure timeout streak.
+    consecutive_timeouts: u32,
 }
 
 impl EndpointHealthState {
@@ -39,6 +47,46 @@ impl EndpointHealthState {
             samples: 0,
             healthy: true,
             consecutive_failures: 0,
+            consecutive_timeouts: 0,
+        }
+    }
+}
+
+/// RAII guard that increments `aframp_horizon_active_connections` on
+/// creation and decrements it on drop (including early-return via `?`).
+struct ActiveConnectionGuard;
+
+impl ActiveConnectionGuard {
+    fn new() -> Self {
+        crate::metrics::stellar_horizon::active_connections().inc();
+        Self
+    }
+}
+
+impl Drop for ActiveConnectionGuard {
+    fn drop(&mut self) {
+        crate::metrics::stellar_horizon::active_connections().dec();
+    }
+}
+
+/// Tunables for the underlying reqwest HTTP client backing [`HorizonClient`].
+#[derive(Debug, Clone)]
+pub struct HorizonClientConfig {
+    /// Max idle connections kept open per host by the connection pool.
+    pub max_connections: usize,
+    /// Per-request timeout.
+    pub request_timeout: Duration,
+    /// TCP keep-alive interval for pooled connections (also used as the
+    /// pool's idle-connection timeout).
+    pub keep_alive: Duration,
+}
+
+impl Default for HorizonClientConfig {
+    fn default() -> Self {
+        Self {
+            max_connections: 32,
+            request_timeout: Duration::from_secs(15),
+            keep_alive: Duration::from_secs(90),
         }
     }
 }
@@ -75,15 +123,31 @@ pub struct TransactionsResponse {
 
 impl HorizonClient {
     pub fn new(base_url: String) -> Self {
+        Self::with_config(base_url, HorizonClientConfig::default())
+    }
+
+    /// Build a client with an explicitly configured connection pool size,
+    /// request timeout, and keep-alive interval (see [`HorizonClientConfig`]).
+    pub fn with_config(base_url: String, config: HorizonClientConfig) -> Self {
         let endpoints = vec![base_url.clone()];
         let endpoint_health = new_health_states(endpoints.len());
+        let client = reqwest::Client::builder()
+            .timeout(config.request_timeout)
+            .pool_max_idle_per_host(config.max_connections)
+            .pool_idle_timeout(config.keep_alive)
+            .tcp_keepalive(config.keep_alive)
+            .build()
+            .unwrap_or_else(|e| {
+                warn!(error = %e, "Failed to build configured Horizon reqwest client — falling back to defaults");
+                reqwest::Client::new()
+            });
         Self {
             base_url,
             rpc_endpoints: std::sync::Arc::new(endpoints),
             rr_index: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             endpoint_health,
-            client: reqwest::Client::new(),
-            request_timeout: Duration::from_secs(15),
+            client,
+            request_timeout: config.request_timeout,
         }
     }
 
@@ -142,6 +206,19 @@ impl HorizonClient {
     /// EWMA success rate and the Prometheus gauge, and flipping its circuit
     /// breaker open/closed as thresholds are crossed.
     fn record_result(&self, endpoint_idx: usize, success: bool) {
+        self.record_outcome(endpoint_idx, success, false);
+    }
+
+    /// Record a request that failed specifically because it timed out. Tracks
+    /// a *consecutive timeout* streak independent of the general EWMA
+    /// success-rate breaker, tripping the endpoint's circuit immediately once
+    /// [`TIMEOUT_CIRCUIT_THRESHOLD`] consecutive timeouts are seen — a run of
+    /// timeouts means the endpoint is unresponsive right now.
+    fn record_timeout_failure(&self, endpoint_idx: usize) {
+        self.record_outcome(endpoint_idx, false, true);
+    }
+
+    fn record_outcome(&self, endpoint_idx: usize, success: bool, is_timeout: bool) {
         let Some(slot) = self.endpoint_health.get(endpoint_idx) else {
             return;
         };
@@ -151,7 +228,7 @@ impl HorizonClient {
             .cloned()
             .unwrap_or_else(|| self.base_url.clone());
 
-        let (rate, healthy, just_tripped, just_recovered) = {
+        let (rate, healthy, just_tripped, just_recovered, timeout_tripped, consecutive_timeouts) = {
             let Ok(mut state) = slot.lock() else {
                 return;
             };
@@ -165,9 +242,15 @@ impl HorizonClient {
             } else {
                 state.consecutive_failures.saturating_add(1)
             };
+            state.consecutive_timeouts = if is_timeout {
+                state.consecutive_timeouts.saturating_add(1)
+            } else {
+                0
+            };
 
             let mut just_tripped = false;
             let mut just_recovered = false;
+            let mut timeout_tripped = false;
 
             if state.healthy
                 && state.samples >= MIN_SAMPLES_BEFORE_TRIP
@@ -175,13 +258,27 @@ impl HorizonClient {
             {
                 state.healthy = false;
                 just_tripped = true;
+            } else if state.healthy && state.consecutive_timeouts > TIMEOUT_CIRCUIT_THRESHOLD {
+                // Fast path: don't wait for MIN_SAMPLES_BEFORE_TRIP when the
+                // endpoint is timing out on every request right now.
+                state.healthy = false;
+                just_tripped = true;
+                timeout_tripped = true;
             } else if !state.healthy && state.ewma_success_rate >= RECOVERY_THRESHOLD {
                 state.healthy = true;
                 state.consecutive_failures = 0;
+                state.consecutive_timeouts = 0;
                 just_recovered = true;
             }
 
-            (state.ewma_success_rate, state.healthy, just_tripped, just_recovered)
+            (
+                state.ewma_success_rate,
+                state.healthy,
+                just_tripped,
+                just_recovered,
+                timeout_tripped,
+                state.consecutive_timeouts,
+            )
         };
 
         crate::metrics::stellar_horizon::endpoint_success_rate()
@@ -191,7 +288,13 @@ impl HorizonClient {
             .with_label_values(&[&endpoint_label])
             .set(if healthy { 1.0 } else { 0.0 });
 
-        if just_tripped {
+        if just_tripped && timeout_tripped {
+            warn!(
+                endpoint = %endpoint_label,
+                consecutive_timeouts,
+                "Horizon endpoint circuit-broken after repeated consecutive timeouts; excluded from rotation"
+            );
+        } else if just_tripped {
             warn!(
                 endpoint = %endpoint_label,
                 success_rate = rate,
@@ -267,6 +370,7 @@ impl HorizonClient {
         let mut params = std::collections::HashMap::new();
         params.insert("tx", tx_envelope);
 
+        let _conn_guard = ActiveConnectionGuard::new();
         let response = self
             .client
             .post(&url)
@@ -275,7 +379,11 @@ impl HorizonClient {
             .send()
             .await
             .map_err(|e| {
-                self.record_result(endpoint_idx, false);
+                if e.is_timeout() {
+                    self.record_timeout_failure(endpoint_idx);
+                } else {
+                    self.record_result(endpoint_idx, false);
+                }
                 SubmissionError::HorizonApi(format!("POST /transactions failed: {}", e))
             })?;
 
@@ -334,6 +442,7 @@ impl HorizonClient {
         let (endpoint_idx, endpoint) = self.pick_endpoint();
         let url = format!("{}/transactions/{}", endpoint, tx_hash);
 
+        let _conn_guard = ActiveConnectionGuard::new();
         let response = self
             .client
             .get(&url)
@@ -341,7 +450,11 @@ impl HorizonClient {
             .send()
             .await
             .map_err(|e| {
-                self.record_result(endpoint_idx, false);
+                if e.is_timeout() {
+                    self.record_timeout_failure(endpoint_idx);
+                } else {
+                    self.record_result(endpoint_idx, false);
+                }
                 SubmissionError::HorizonApi(format!("GET /transactions/{{}} failed: {}", e))
             })?;
 
@@ -374,6 +487,7 @@ impl HorizonClient {
             sequence: String,
         }
 
+        let _conn_guard = ActiveConnectionGuard::new();
         let response = self
             .client
             .get(&url)
@@ -381,7 +495,11 @@ impl HorizonClient {
             .send()
             .await
             .map_err(|e| {
-                self.record_result(endpoint_idx, false);
+                if e.is_timeout() {
+                    self.record_timeout_failure(endpoint_idx);
+                } else {
+                    self.record_result(endpoint_idx, false);
+                }
                 SubmissionError::HorizonApi(format!("failed to fetch account sequence: {}", e))
             })?;
 

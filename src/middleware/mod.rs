@@ -39,3 +39,5 @@ pub mod scope_middleware;
 
 pub mod cors;
 pub mod security;
+#[cfg(feature = "database")]
+pub mod paystack_ip_allowlist;

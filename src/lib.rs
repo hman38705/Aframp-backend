@@ -9,6 +9,9 @@ use soroban_sdk::{
 
 // ── Core infrastructure ────────────────────────────────────────────────────────
 #[cfg(feature = "database")]
+pub mod chains;
+
+#[cfg(feature = "database")]
 pub mod database;
 
 #[cfg(feature = "database")]
@@ -85,6 +88,12 @@ pub mod recurring;
 #[cfg(feature = "database")]
 pub mod stellar;
 
+// Exposes chains::stellar::xdr_parser to benches/xdr_parser.rs, which links
+// against this library crate (main.rs's own `mod chains;` only reaches the
+// binary target and isn't visible to bench/test crates).
+#[cfg(feature = "database")]
+pub mod chains;
+
 // ── Wallet ─────────────────────────────────────────────────────────────────────
 #[cfg(feature = "database")]
 pub mod wallet;
@@ -107,6 +116,9 @@ pub mod compliance_effectiveness;
 
 #[cfg(feature = "database")]
 pub mod risk;
+
+#[cfg(feature = "database")]
+pub mod travel_rule;
 
 // ── API layer ─────────────────────────────────────────────────────────────────
 #[cfg(feature = "database")]

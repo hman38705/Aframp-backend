@@ -8,6 +8,7 @@
 set -euo pipefail
 
 # Configuration
+METRICS_DIR="${METRICS_DIR:-/var/lib/node_exporter/textfile}"
 LOG_DIR="${LOG_DIR:-/var/log/aframp}"
 ARCHIVE_DIR="${ARCHIVE_DIR:-/var/log/aframp/archive}"
 RETENTION_DAYS="${RETENTION_DAYS:-90}"
@@ -258,15 +259,65 @@ generate_report() {
 }
 
 # ============================================================================
+# Prometheus Metrics Emission (Issue #789)
+# ============================================================================
+emit_rotation_metrics() {
+    local success="$1"  # 1 = success, 0 = failure
+    local timestamp
+    timestamp=$(date +%s)
+
+    # Disk usage percentage for $LOG_DIR
+    local disk_pct
+    disk_pct=$(df "$LOG_DIR" 2>/dev/null | awk 'NR==2 {gsub(/%/,""); print $5}' || echo 0)
+
+    mkdir -p "$METRICS_DIR"
+    local metrics_file="${METRICS_DIR}/aframp_log_rotation.prom"
+    {
+        echo "# HELP aframp_log_rotation_last_success_timestamp Unix timestamp of the last successful log rotation."
+        echo "# TYPE aframp_log_rotation_last_success_timestamp gauge"
+        if [ "$success" -eq 1 ]; then
+            echo "aframp_log_rotation_last_success_timestamp $timestamp"
+        else
+            # Keep previous value if available; otherwise write 0 so the alert fires.
+            if [ -f "$metrics_file" ]; then
+                grep '^aframp_log_rotation_last_success_timestamp ' "$metrics_file" || echo "aframp_log_rotation_last_success_timestamp 0"
+            else
+                echo "aframp_log_rotation_last_success_timestamp 0"
+            fi
+        fi
+        echo ""
+        echo "# HELP aframp_log_dir_disk_usage_percent Percentage of disk space used on the log partition."
+        echo "# TYPE aframp_log_dir_disk_usage_percent gauge"
+        echo "aframp_log_dir_disk_usage_percent $disk_pct"
+    } > "${metrics_file}.tmp" && mv "${metrics_file}.tmp" "$metrics_file"
+
+    log_info "Metrics written to $metrics_file (success=$success, disk=${disk_pct}%)"
+}
+
+# ============================================================================
 # Main Execution
 # ============================================================================
 main() {
     log_info "Starting automated log rotation"
-    
-    rotate_logs
+
+    # Run rotation and capture exit status without aborting the whole script,
+    # so we can emit failure metrics before exiting (#789).
+    if rotate_logs; then
+        ROTATION_OK=1
+    else
+        ROTATION_OK=0
+        log_error "Log rotation encountered errors — see above for details"
+    fi
+
     cleanup_old_archives
     generate_report
-    
+    emit_rotation_metrics "$ROTATION_OK"
+
+    if [ "$ROTATION_OK" -eq 0 ]; then
+        log_error "Log rotation completed with errors"
+        exit 1
+    fi
+
     log_info "Log rotation completed successfully"
 }
 

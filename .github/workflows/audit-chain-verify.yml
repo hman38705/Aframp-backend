@@ -1,0 +1,69 @@
+name: Daily Audit Chain Integrity Verification
+
+# Issue #790: Run audit chain verification daily and alert on any failure.
+# Verifies hash-chain continuity and anchor integrity in the production audit ledger.
+
+on:
+  schedule:
+    # Run at 02:00 UTC every day
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  verify-audit-chain:
+    name: Verify Audit Chain Integrity
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run audit chain verification
+        id: verify
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        run: |
+          set +e
+          bash scripts/verify_audit_chain.sh 2>&1 | tee /tmp/verify_output.txt
+          EXIT_CODE=${PIPESTATUS[0]}
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+          echo "output<<EOF" >> "$GITHUB_OUTPUT"
+          cat /tmp/verify_output.txt >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          exit $EXIT_CODE
+
+      - name: Log verification result to database
+        if: always()
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          VERIFY_STATUS: ${{ steps.verify.outputs.exit_code == '0' && 'passed' || 'failed' }}
+          VERIFY_OUTPUT: ${{ steps.verify.outputs.output }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          psql "$DATABASE_URL" -c "
+            INSERT INTO audit_chain_verification_log
+              (run_id, verified_at, status, output)
+            VALUES
+              ('$RUN_ID', NOW(), '$VERIFY_STATUS', \$\$${VERIFY_OUTPUT}\$\$)
+            ON CONFLICT (run_id) DO NOTHING;
+          " || echo "Warning: could not write verification log — check audit_chain_verification_log table."
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_ONCALL_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H 'Content-Type: application/json' \
+            -d "{
+              \"text\": \":rotating_light: *Audit chain integrity check FAILED* — immediate investigation required.\",
+              \"attachments\": [{
+                \"color\": \"danger\",
+                \"fields\": [
+                  {\"title\": \"Repository\", \"value\": \"${{ github.repository }}\", \"short\": true},
+                  {\"title\": \"Run\", \"value\": \"<$RUN_URL|View run>\", \"short\": true}
+                ]
+              }]
+            }" || echo "Slack notification failed — check SLACK_ONCALL_WEBHOOK_URL secret."
