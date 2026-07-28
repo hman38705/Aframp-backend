@@ -24,6 +24,19 @@ pub const DEFAULT_THRESHOLD_MS: i64 = 100;
 /// Hysteresis: breaker closes again when lag drops below this fraction of the threshold.
 const HYSTERESIS_FACTOR: f64 = 0.5;
 
+/// Env var used to override `DEFAULT_THRESHOLD_MS` without recompiling, so
+/// prod/dev replicas on different hardware can each set their own threshold.
+const THRESHOLD_MS_ENV_VAR: &str = "REPLICATION_LAG_THRESHOLD_MS";
+
+/// Resolve the lag threshold: `REPLICATION_LAG_THRESHOLD_MS` env var if set
+/// and parseable, otherwise `DEFAULT_THRESHOLD_MS`.
+pub fn threshold_ms_from_env() -> i64 {
+    std::env::var(THRESHOLD_MS_ENV_VAR)
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(DEFAULT_THRESHOLD_MS)
+}
+
 // ---------------------------------------------------------------------------
 // ReplicationMonitor
 // ---------------------------------------------------------------------------
