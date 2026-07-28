@@ -8,11 +8,46 @@ use axum::{
 };
 use chrono::Utc;
 use jsonwebtoken::{decode, DecodingKey, Validation};
-use serde::{Deserialize, Serialize};
+use once_cell::sync::Lazy;
+use serde::Deserialize;
 use serde_json::json;
 use std::{collections::HashMap, fs::File, net::SocketAddr, sync::Arc};
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 use uuid::Uuid;
+
+/// Atomic sliding-window check-and-increment (Issue #727).
+///
+/// Combines ZREMRANGEBYSCORE + ZCARD + conditional ZADD/EXPIRE into a single
+/// Lua script so the check and the increment happen as one atomic operation
+/// on Redis — eliminating the race window that existed between the previous
+/// separate "check" and "add" pipelines (two instances could both observe
+/// `count < limit` and both add, letting `2x limit` requests through).
+///
+/// KEYS[1] = sorted-set key
+/// ARGV[1] = now (ms)
+/// ARGV[2] = window (ms)
+/// ARGV[3] = limit
+/// ARGV[4] = member id (unique per request)
+/// ARGV[5] = window (seconds, for EXPIRE)
+///
+/// Returns { allowed (0|1), count } where `count` is the window occupancy
+/// after this call (post-increment when allowed, current count when not).
+static SLIDING_WINDOW_SCRIPT: Lazy<redis::Script> = Lazy::new(|| {
+    redis::Script::new(
+        r#"
+        redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', tonumber(ARGV[1]) - tonumber(ARGV[2]))
+        local count = redis.call('ZCARD', KEYS[1])
+        local limit = tonumber(ARGV[3])
+        if count < limit then
+            redis.call('ZADD', KEYS[1], ARGV[1], ARGV[4])
+            redis.call('EXPIRE', KEYS[1], ARGV[5])
+            return {1, count + 1}
+        else
+            return {0, count}
+        end
+        "#,
+    )
+});
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct LimitConfig {
@@ -173,48 +208,51 @@ pub async fn rate_limit_middleware(
         }
     };
 
-    // 3. Sliding Window Algorithm Pipeline
+    // 3. Atomic sliding-window check-and-increment (Issue #727). Redis is
+    // the single source of truth across all instances, so this is
+    // distributed-safe; if Redis itself is unavailable, fail open (allow
+    // the request) rather than 500ing every request in the fleet.
+    let now_ms = Utc::now().timestamp_millis();
+    let req_id = Uuid::new_v4().to_string();
+    let reset_at = (now_ms / 1000) + limit_conf.window;
+
     let mut conn = match state.cache.get_connection().await {
         Ok(c) => c,
         Err(e) => {
-            error!("Redis connection failed in rate_limit_middleware: {}", e);
-            let body = Json(json!({"error": "Internal server error"}));
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, body).into_response());
+            warn!(
+                "Redis connection unavailable in rate_limit_middleware, failing open: {}",
+                e
+            );
+            crate::middleware::rate_limit_metrics::record_redis_fallback("connection_error");
+            return Ok(next.run(req).await);
         }
     };
 
-    let now_ms = Utc::now().timestamp_millis();
-    let window_start_ms = now_ms - (limit_conf.window * 1000);
-    let req_id = Uuid::new_v4().to_string();
-
-    // Pipeline:
-    // ZREMRANGEBYSCORE key -inf window_start_ms
-    // ZCOUNT key -inf +inf
-    let (removed, count): (i64, i64) = match redis::pipe()
-        .atomic()
-        .cmd("ZREMRANGEBYSCORE")
-        .arg(&redis_key)
-        .arg("-inf")
-        .arg(window_start_ms)
-        .cmd("ZCARD")
-        .arg(&redis_key)
-        .query_async(&mut *conn)
+    let (allowed, count): (i64, i64) = match SLIDING_WINDOW_SCRIPT
+        .key(&redis_key)
+        .arg(now_ms)
+        .arg(limit_conf.window * 1000)
+        .arg(limit_conf.limit)
+        .arg(&req_id)
+        .arg(limit_conf.window)
+        .invoke_async(&mut *conn)
         .await
     {
         Ok(res) => res,
         Err(e) => {
-            error!("Redis pipe error in rate_limit_middleware: {}", e);
-            let body = Json(json!({"error": "Internal server error"}));
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, body).into_response());
+            warn!(
+                "Redis Lua script failed in rate_limit_middleware, failing open: {}",
+                e
+            );
+            crate::middleware::rate_limit_metrics::record_redis_fallback("script_error");
+            return Ok(next.run(req).await);
         }
     };
 
     let remaining = limit_conf.limit - count;
+    let retry_after = limit_conf.window;
 
-    let reset_at = (now_ms / 1000) + limit_conf.window;
-    let mut retry_after = limit_conf.window;
-
-    if count >= limit_conf.limit {
+    if allowed == 0 {
         warn!(key = %redis_key, count = count, limit = limit_conf.limit, "Rate limit exceeded");
 
         // Emit metric for alert rule: aframp_rate_limit_breaches_total
@@ -259,27 +297,8 @@ pub async fn rate_limit_middleware(
         return Err(res);
     }
 
-    // Allow path: Add current request
-    let _: () = match redis::pipe()
-        .atomic()
-        .cmd("ZADD")
-        .arg(&redis_key)
-        .arg(now_ms)
-        .arg(&req_id)
-        .cmd("EXPIRE")
-        .arg(&redis_key)
-        .arg(limit_conf.window)
-        .query_async::<()>(&mut *conn)
-        .await
-    {
-        Ok(_) => (),
-        Err(e) => error!(
-            "Failed to add to sorted set for rate_limit_middleware: {}",
-            e
-        ),
-    };
-
-    // Forward the request to the next logical layer
+    // The Lua script already recorded this request atomically — just
+    // forward it and annotate the response with the resulting quota state.
     let mut res = next.run(req).await.into_response();
 
     // Inject successful Rate Limit headers
@@ -289,7 +308,7 @@ pub async fn rate_limit_middleware(
     );
     res.headers_mut().insert(
         "X-RateLimit-Remaining",
-        HeaderValue::from_str(&(remaining - 1).max(0).to_string()).unwrap(),
+        HeaderValue::from_str(&remaining.max(0).to_string()).unwrap(),
     );
     res.headers_mut().insert(
         "X-RateLimit-Reset",
@@ -297,7 +316,7 @@ pub async fn rate_limit_middleware(
     );
     res.headers_mut().insert(
         "X-RateLimit-Used",
-        HeaderValue::from_str(&(count + 1).to_string()).unwrap(),
+        HeaderValue::from_str(&count.to_string()).unwrap(),
     );
 
     Ok(res)
