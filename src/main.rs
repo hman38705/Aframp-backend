@@ -2483,7 +2483,9 @@ async fn main() -> anyhow::Result<()> {
             default: crate::middleware::rate_limit::EndpointLimits {
                 per_ip: Some(crate::middleware::rate_limit::LimitConfig { limit: 100, window: 60 }),
                 per_wallet: None,
-            }
+                tier: None,
+            },
+            tiers: std::collections::HashMap::new(),
         }
     }));
 

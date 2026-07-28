@@ -20,16 +20,45 @@ pub struct LimitConfig {
     pub window: i64,
 }
 
+/// Endpoint sensitivity tier (Issue #726). Determines the default per-IP
+/// limit applied when an endpoint entry doesn't set `per_ip` explicitly.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EndpointTier {
+    #[serde(rename = "CRITICAL")]
+    Critical,
+    #[serde(rename = "FINANCIAL")]
+    Financial,
+    #[serde(rename = "STANDARD")]
+    Standard,
+    #[serde(rename = "PUBLIC")]
+    Public,
+}
+
+impl EndpointTier {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EndpointTier::Critical => "CRITICAL",
+            EndpointTier::Financial => "FINANCIAL",
+            EndpointTier::Standard => "STANDARD",
+            EndpointTier::Public => "PUBLIC",
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct EndpointLimits {
     pub per_ip: Option<LimitConfig>,
     pub per_wallet: Option<LimitConfig>,
+    #[serde(default)]
+    pub tier: Option<EndpointTier>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct RateLimitConfig {
     pub endpoints: HashMap<String, EndpointLimits>,
     pub default: EndpointLimits,
+    #[serde(default)]
+    pub tiers: HashMap<EndpointTier, LimitConfig>,
 }
 
 impl RateLimitConfig {
@@ -40,13 +69,25 @@ impl RateLimitConfig {
         Ok(config)
     }
 
+    /// Resolves the limits for a given path, applying the endpoint's
+    /// sensitivity tier (Issue #726) as the per_ip fallback when the
+    /// matched entry (or the default) doesn't define per_ip explicitly.
     pub fn get_limits(&self, path: &str) -> EndpointLimits {
-        for (prefix, limits) in &self.endpoints {
-            if path.starts_with(prefix) {
-                return limits.clone();
-            }
+        let mut limits = self
+            .endpoints
+            .iter()
+            .find(|(prefix, _)| path.starts_with(prefix.as_str()))
+            .map(|(_, limits)| limits.clone())
+            .unwrap_or_else(|| self.default.clone());
+
+        if limits.per_ip.is_none() {
+            limits.per_ip = limits
+                .tier
+                .and_then(|t| self.tiers.get(&t).cloned())
+                .or_else(|| self.default.per_ip.clone());
         }
-        self.default.clone()
+
+        limits
     }
 }
 
