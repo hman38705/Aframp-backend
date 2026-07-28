@@ -31,6 +31,20 @@ pub struct QuoteHandlerState {
 }
 
 /// Handle POST /api/onramp/quote
+#[utoipa::path(
+    post,
+    path = "/api/onramp/quote",
+    tag = "onramp",
+    summary = "Create an onramp quote",
+    description = "Calculate a quote for converting NGN to cNGN, including the exchange rate and fee breakdown, and store it (TTL 5 minutes) for later redemption via POST /api/onramp/initiate. If the destination wallet does not yet have an active cNGN trustline, the response instead describes the trustline requirements that must be satisfied first.",
+    request_body = OnrampQuoteRequest,
+    responses(
+        (status = 200, description = "Quote created successfully (shape depends on whether the wallet already has a cNGN trustline)", body = OnrampQuoteResponse),
+        (status = 400, description = "Invalid request (invalid wallet address, unsupported currency, or amount out of range)"),
+        (status = 500, description = "Internal error while storing the quote"),
+        (status = 504, description = "Timed out fetching the exchange rate")
+    )
+)]
 pub async fn create_quote(
     State(state): State<QuoteHandlerState>,
     Json(request): Json<OnrampQuoteRequest>,

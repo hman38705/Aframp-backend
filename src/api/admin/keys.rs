@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::{error, info, warn};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::api_keys::{
@@ -41,7 +42,7 @@ pub struct AdminKeysState {
 
 // ─── Request / Response ───────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct IssueKeyRequest {
     /// "testnet" | "mainnet"
     pub environment: String,
@@ -53,7 +54,7 @@ pub struct IssueKeyRequest {
 
 /// Response returned exactly once at issuance.
 /// The `plaintext_key` is never retrievable again after this response.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct IssueKeyResponse {
     pub key_id: String,
     pub consumer_id: String,
@@ -69,7 +70,7 @@ pub struct IssueKeyResponse {
     pub security_notice: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct KeySummary {
     pub key_id: String,
     pub consumer_id: String,
@@ -104,6 +105,22 @@ fn err(status: StatusCode, code: &str, msg: impl Into<String>) -> Response {
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
 /// POST /api/admin/consumers/:consumer_id/keys
+#[utoipa::path(
+    post,
+    path = "/api/admin/consumers/{consumer_id}/keys",
+    tag = "admin",
+    summary = "Issue an API key for a consumer",
+    params(("consumer_id" = Uuid, Path, description = "Consumer ID")),
+    request_body = IssueKeyRequest,
+    responses(
+        (status = 201, description = "Key issued — plaintext key shown exactly once", body = IssueKeyResponse),
+        (status = 400, description = "Invalid environment or missing issued_by"),
+        (status = 404, description = "Consumer not found"),
+        (status = 422, description = "Max active keys reached for consumer"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn issue_key(
     State(state): State<AdminKeysState>,
     Path(consumer_id): Path<Uuid>,
@@ -263,6 +280,18 @@ pub async fn issue_key(
 }
 
 /// GET /api/admin/consumers/:consumer_id/keys
+#[utoipa::path(
+    get,
+    path = "/api/admin/consumers/{consumer_id}/keys",
+    tag = "admin",
+    summary = "List API keys for a consumer",
+    params(("consumer_id" = Uuid, Path, description = "Consumer ID")),
+    responses(
+        (status = 200, description = "Keys for the consumer", body = Vec<KeySummary>),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn list_keys(
     State(state): State<AdminKeysState>,
     Path(consumer_id): Path<Uuid>,
@@ -301,6 +330,22 @@ pub async fn list_keys(
 }
 
 /// DELETE /api/admin/consumers/:consumer_id/keys/:key_id
+#[utoipa::path(
+    delete,
+    path = "/api/admin/consumers/{consumer_id}/keys/{key_id}",
+    tag = "admin",
+    summary = "Revoke an API key",
+    params(
+        ("consumer_id" = Uuid, Path, description = "Consumer ID"),
+        ("key_id" = Uuid, Path, description = "Key ID")
+    ),
+    responses(
+        (status = 200, description = "Key revoked", body = KeySummary),
+        (status = 404, description = "Key not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn revoke_key(
     State(state): State<AdminKeysState>,
     Path((consumer_id, key_id)): Path<(Uuid, Uuid)>,

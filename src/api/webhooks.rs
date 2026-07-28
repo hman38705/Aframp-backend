@@ -15,6 +15,21 @@ pub struct WebhookState {
 }
 
 /// POST /webhooks/:provider
+#[utoipa::path(
+    post,
+    path = "/webhooks/{provider}",
+    tag = "webhooks",
+    summary = "Receive a payment provider webhook",
+    description = "Generic webhook receiver for payment providers (e.g. flutterwave, paystack). Verifies the provider-specific signature header, then enqueues the event for asynchronous processing. Not authenticated via JWT — trust is established via the provider signature.",
+    params(
+        ("provider" = String, Path, description = "Payment provider identifier")
+    ),
+    responses(
+        (status = 202, description = "Webhook accepted and queued for processing"),
+        (status = 400, description = "Invalid JSON payload"),
+        (status = 401, description = "Missing or invalid provider signature")
+    )
+)]
 pub async fn handle_webhook(
     State(state): State<Arc<WebhookState>>,
     Path(provider): Path<String>,

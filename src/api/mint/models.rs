@@ -4,12 +4,13 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 // ===== SUBMIT MINT REQUEST =====
 
 /// POST /api/mint/requests
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct SubmitMintRequest {
     /// Stellar destination wallet address
     pub destination_wallet: String,
@@ -24,7 +25,7 @@ pub struct SubmitMintRequest {
 }
 
 /// Response after submitting a mint request
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SubmitMintResponse {
     pub mint_request_id: Uuid,
     pub status: String,
@@ -39,7 +40,7 @@ pub struct SubmitMintResponse {
 // ===== APPROVE / REJECT =====
 
 /// POST /api/mint/requests/:id/approve
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ApproveMintRequest {
     /// Optional comment from the approver
     #[serde(default)]
@@ -47,7 +48,7 @@ pub struct ApproveMintRequest {
 }
 
 /// POST /api/mint/requests/:id/reject
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct RejectMintRequest {
     /// Mandatory reason code (e.g. "SUSPICIOUS_ACTIVITY", "AMOUNT_EXCEEDS_LIMIT")
     pub reason_code: String,
@@ -57,7 +58,7 @@ pub struct RejectMintRequest {
 }
 
 /// Generic action response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct MintActionResponse {
     pub mint_request_id: Uuid,
     pub status: String,
@@ -69,7 +70,7 @@ pub struct MintActionResponse {
 // ===== GET MINT REQUEST =====
 
 /// Single approval entry in the timeline
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ApprovalEntry {
     pub approver_id: String,
     pub approver_role: String,
@@ -80,7 +81,7 @@ pub struct ApprovalEntry {
 }
 
 /// Single audit log entry in the timeline
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AuditEntry {
     pub id: i64,
     pub actor_id: String,
@@ -93,7 +94,7 @@ pub struct AuditEntry {
 }
 
 /// Full mint request detail response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct MintRequestDetail {
     pub id: Uuid,
     pub submitted_by: String,
@@ -115,7 +116,7 @@ pub struct MintRequestDetail {
 // ===== LIST MINT REQUESTS =====
 
 /// Query params for listing mint requests
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ListMintRequestsQuery {
     #[serde(default)]
     pub status: Option<String>,
@@ -126,7 +127,7 @@ pub struct ListMintRequestsQuery {
 }
 
 /// Paginated list response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ListMintRequestsResponse {
     pub items: Vec<MintRequestDetail>,
     pub total: i64,

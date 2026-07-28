@@ -21,6 +21,7 @@ use axum::{
 use bigdecimal::{BigDecimal, FromPrimitive};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::database::partner_repository::PartnerRepository;
@@ -42,14 +43,14 @@ pub struct PartnerApiState {
 // Request / response types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct QuoteRequest {
     pub from_currency: String,
     pub to_currency: String,
     pub from_amount: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct QuoteResponse {
     pub from_currency: String,
     pub to_currency: String,
@@ -61,7 +62,7 @@ pub struct QuoteResponse {
     pub expires_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct TransferRequest {
     pub partner_ref: String,
     pub from_currency: String,
@@ -71,7 +72,7 @@ pub struct TransferRequest {
     pub metadata: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct TransferResponse {
     pub id: Uuid,
     pub partner_ref: String,
@@ -150,6 +151,24 @@ fn partner_err(e: PartnerError) -> Response {
 // Handlers
 // ---------------------------------------------------------------------------
 
+#[utoipa::path(
+    post,
+    path = "/api/partner/quote",
+    tag = "partner",
+    summary = "Get an FX quote",
+    description = "Get a firm, time-limited FX quote for a partner-initiated transfer between two currencies",
+    request_body = QuoteRequest,
+    responses(
+        (status = 200, description = "Quote generated successfully", body = QuoteResponse),
+        (status = 400, description = "Invalid request (unsupported corridor, amount out of bounds, invalid amount)"),
+        (status = 401, description = "Missing or invalid partner API key"),
+        (status = 422, description = "Daily limit exceeded or insufficient liquidity"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("bearer_auth" = [])
+    )
+)]
 pub async fn get_quote(
     State(state): State<Arc<PartnerApiState>>,
     headers: HeaderMap,
@@ -217,6 +236,25 @@ pub async fn get_quote(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/partner/transfers",
+    tag = "partner",
+    summary = "Initiate a transfer",
+    description = "Initiate a partner transfer using a previously locked-in FX rate. May trigger Travel Rule compliance checks for cross-border or high-risk corridors.",
+    request_body = TransferRequest,
+    responses(
+        (status = 201, description = "Transfer initiated successfully", body = TransferResponse),
+        (status = 400, description = "Invalid request (unsupported corridor, amount/rate out of bounds)"),
+        (status = 401, description = "Missing or invalid partner API key"),
+        (status = 409, description = "Duplicate partner_ref"),
+        (status = 422, description = "Daily limit exceeded or insufficient liquidity"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("bearer_auth" = [])
+    )
+)]
 pub async fn initiate_transfer(
     State(state): State<Arc<PartnerApiState>>,
     headers: HeaderMap,
@@ -373,6 +411,25 @@ pub async fn initiate_transfer(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/partner/transfers/{id}",
+    tag = "partner",
+    summary = "Get transfer status",
+    description = "Get the current status of a previously initiated partner transfer",
+    params(
+        ("id" = Uuid, Path, description = "Transfer ID")
+    ),
+    responses(
+        (status = 200, description = "Transfer status retrieved", body = TransferResponse),
+        (status = 401, description = "Missing or invalid partner API key"),
+        (status = 404, description = "Transfer not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("bearer_auth" = [])
+    )
+)]
 pub async fn get_transfer_status(
     State(state): State<Arc<PartnerApiState>>,
     headers: HeaderMap,
@@ -418,6 +475,21 @@ pub async fn get_transfer_status(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/partner/liquidity",
+    tag = "partner",
+    summary = "Get partner liquidity",
+    description = "Get the liquidity account balances available to the authenticated partner, by currency",
+    responses(
+        (status = 200, description = "Liquidity accounts retrieved"),
+        (status = 401, description = "Missing or invalid partner API key"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("bearer_auth" = [])
+    )
+)]
 pub async fn get_liquidity(
     State(state): State<Arc<PartnerApiState>>,
     headers: HeaderMap,
@@ -461,6 +533,21 @@ pub async fn get_liquidity(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/partner/settlements",
+    tag = "partner",
+    summary = "Get partner settlements",
+    description = "Get the settlement history (last 30 days) for the authenticated partner",
+    responses(
+        (status = 200, description = "Settlements retrieved"),
+        (status = 401, description = "Missing or invalid partner API key"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("bearer_auth" = [])
+    )
+)]
 pub async fn get_settlements(
     State(state): State<Arc<PartnerApiState>>,
     headers: HeaderMap,
@@ -507,6 +594,21 @@ pub async fn get_settlements(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/partner/branding",
+    tag = "partner",
+    summary = "Get partner branding",
+    description = "Get the white-label branding configuration (logo, colors, email template, language overrides) for the authenticated partner",
+    responses(
+        (status = 200, description = "Branding configuration retrieved (empty object if none configured)"),
+        (status = 401, description = "Missing or invalid partner API key"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("bearer_auth" = [])
+    )
+)]
 pub async fn get_branding(
     State(state): State<Arc<PartnerApiState>>,
     headers: HeaderMap,

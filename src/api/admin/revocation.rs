@@ -32,6 +32,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::warn;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::services::revocation::{
@@ -47,12 +48,12 @@ pub struct RevocationState {
 
 // ─── Request / Response types ─────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct RevokeKeyRequest {
     pub reason: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct AdminRevokeKeyRequest {
     pub reason: String,
     #[serde(default = "default_admin_revocation_type")]
@@ -63,18 +64,18 @@ fn default_admin_revocation_type() -> String {
     "admin_initiated".to_string()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct RevokeAllRequest {
     pub reason: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct BlacklistConsumerRequest {
     pub reason: String,
     pub expires_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct RevokeKeyResponse {
     pub revocation_id: Uuid,
     pub key_id: Uuid,
@@ -84,14 +85,14 @@ pub struct RevokeKeyResponse {
     pub message: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct RevokeAllResponse {
     pub consumer_id: Uuid,
     pub keys_revoked: usize,
     pub revocations: Vec<RevokeKeyResponse>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct BlacklistResponse {
     pub id: Uuid,
     pub consumer_id: Uuid,
@@ -101,7 +102,7 @@ pub struct BlacklistResponse {
     pub message: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct RevocationListParams {
     pub consumer_id: Option<Uuid>,
     pub revocation_type: Option<String>,
@@ -120,7 +121,7 @@ fn default_page_size() -> i64 {
     20
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct RevocationListResponse {
     pub revocations: Vec<RevocationRecord>,
     pub total: i64,
@@ -128,7 +129,7 @@ pub struct RevocationListResponse {
     pub page_size: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ErrorBody {
     pub code: String,
     pub message: String,
@@ -151,6 +152,24 @@ fn err(status: StatusCode, code: &str, message: impl Into<String>) -> Response {
 ///
 /// Consumer self-service revocation. The consumer_id is extracted from the
 /// authenticated key context injected by the API key middleware.
+#[utoipa::path(
+    post,
+    path = "/api/developer/keys/{key_id}/revoke",
+    tag = "admin",
+    summary = "Self-service API key revocation",
+    params(
+        ("key_id" = Uuid, Path, description = "Key ID to revoke"),
+        ("consumer_id" = Uuid, Query, description = "Consumer ID (testability shim; production reads from auth context)")
+    ),
+    request_body = RevokeKeyRequest,
+    responses(
+        (status = 200, description = "Key revoked", body = RevokeKeyResponse),
+        (status = 400, description = "Missing reason"),
+        (status = 404, description = "Key not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn consumer_revoke_key(
     State(state): State<RevocationState>,
     Path(key_id): Path<Uuid>,
@@ -210,6 +229,24 @@ pub struct ConsumerRevokeParams {
 }
 
 /// POST /api/admin/consumers/:consumer_id/keys/:key_id/revoke
+#[utoipa::path(
+    post,
+    path = "/api/admin/consumers/{consumer_id}/keys/{key_id}/revoke",
+    tag = "admin",
+    summary = "Admin revocation of an individual API key",
+    params(
+        ("consumer_id" = Uuid, Path, description = "Consumer ID"),
+        ("key_id" = Uuid, Path, description = "Key ID to revoke")
+    ),
+    request_body = AdminRevokeKeyRequest,
+    responses(
+        (status = 200, description = "Key revoked", body = RevokeKeyResponse),
+        (status = 400, description = "Missing reason"),
+        (status = 404, description = "Key not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn admin_revoke_key(
     State(state): State<RevocationState>,
     Path((consumer_id, key_id)): Path<(Uuid, Uuid)>,
@@ -268,6 +305,20 @@ pub async fn admin_revoke_key(
 }
 
 /// POST /api/admin/consumers/:consumer_id/revoke-all
+#[utoipa::path(
+    post,
+    path = "/api/admin/consumers/{consumer_id}/revoke-all",
+    tag = "admin",
+    summary = "Revoke all active keys for a consumer",
+    params(("consumer_id" = Uuid, Path, description = "Consumer ID")),
+    request_body = RevokeAllRequest,
+    responses(
+        (status = 200, description = "All keys revoked", body = RevokeAllResponse),
+        (status = 400, description = "Missing reason"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn admin_revoke_all_consumer_keys(
     State(state): State<RevocationState>,
     Path(consumer_id): Path<Uuid>,
@@ -317,6 +368,20 @@ pub async fn admin_revoke_all_consumer_keys(
 }
 
 /// POST /api/admin/consumers/:consumer_id/blacklist
+#[utoipa::path(
+    post,
+    path = "/api/admin/consumers/{consumer_id}/blacklist",
+    tag = "admin",
+    summary = "Blacklist a consumer",
+    params(("consumer_id" = Uuid, Path, description = "Consumer ID")),
+    request_body = BlacklistConsumerRequest,
+    responses(
+        (status = 200, description = "Consumer blacklisted", body = BlacklistResponse),
+        (status = 400, description = "Missing reason"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn admin_blacklist_consumer(
     State(state): State<RevocationState>,
     Path(consumer_id): Path<Uuid>,
@@ -360,6 +425,18 @@ pub async fn admin_blacklist_consumer(
 }
 
 /// DELETE /api/admin/consumers/:consumer_id/blacklist
+#[utoipa::path(
+    delete,
+    path = "/api/admin/consumers/{consumer_id}/blacklist",
+    tag = "admin",
+    summary = "Lift a consumer's blacklist",
+    params(("consumer_id" = Uuid, Path, description = "Consumer ID")),
+    responses(
+        (status = 200, description = "Blacklist lifted"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn admin_lift_consumer_blacklist(
     State(state): State<RevocationState>,
     Path(consumer_id): Path<Uuid>,
@@ -381,6 +458,25 @@ pub async fn admin_lift_consumer_blacklist(
 }
 
 /// GET /api/admin/revocations
+#[utoipa::path(
+    get,
+    path = "/api/admin/revocations",
+    tag = "admin",
+    summary = "Paginated revocation audit list",
+    params(
+        ("consumer_id" = Option<Uuid>, Query, description = "Filter by consumer ID"),
+        ("revocation_type" = Option<String>, Query, description = "Filter by revocation type"),
+        ("from" = Option<String>, Query, description = "Filter from timestamp (RFC3339)"),
+        ("to" = Option<String>, Query, description = "Filter to timestamp (RFC3339)"),
+        ("page" = i64, Query, description = "Page number (default 1)"),
+        ("page_size" = i64, Query, description = "Page size (default 20, max 100)")
+    ),
+    responses(
+        (status = 200, description = "Revocation list", body = RevocationListResponse),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn list_revocations(
     State(state): State<RevocationState>,
     Query(params): Query<RevocationListParams>,
@@ -413,6 +509,17 @@ pub async fn list_revocations(
 }
 
 /// GET /api/admin/blacklist
+#[utoipa::path(
+    get,
+    path = "/api/admin/blacklist",
+    tag = "admin",
+    summary = "Current active blacklist state",
+    responses(
+        (status = 200, description = "Active blacklist entries", body = Vec<BlacklistEntry>),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn list_blacklist(State(state): State<RevocationState>) -> Response {
     match state.service.list_active_blacklist().await {
         Ok(entries) => (StatusCode::OK, Json(entries)).into_response(),

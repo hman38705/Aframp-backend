@@ -10,6 +10,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::sync::Arc;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -21,20 +22,20 @@ pub struct ReconciliationState {
 
 // ── Request / Response types ──────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ListDiscrepanciesQuery {
     pub status: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ResolveDiscrepancyRequest {
     pub notes: Option<String>,
     pub resolved_by: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct DiscrepancyRow {
     pub id: Uuid,
     pub transaction_id: Option<Uuid>,
@@ -49,7 +50,7 @@ pub struct DiscrepancyRow {
     pub notes: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ReportRow {
     pub id: Uuid,
     pub report_date: chrono::NaiveDate,
@@ -67,7 +68,23 @@ pub struct ReportRow {
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// GET /admin/reconciliation/discrepancies
-async fn list_discrepancies(
+#[utoipa::path(
+    get,
+    path = "/admin/reconciliation/discrepancies",
+    tag = "admin",
+    summary = "List reconciliation discrepancies",
+    params(
+        ("status" = Option<String>, Query, description = "Filter by status (default OPEN)"),
+        ("limit" = Option<i64>, Query, description = "Maximum results (capped at 200)"),
+        ("offset" = Option<i64>, Query, description = "Pagination offset")
+    ),
+    responses(
+        (status = 200, description = "Discrepancies", body = Vec<DiscrepancyRow>),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn list_discrepancies(
     State(state): State<Arc<ReconciliationState>>,
     Query(q): Query<ListDiscrepanciesQuery>,
 ) -> impl IntoResponse {
@@ -123,7 +140,21 @@ async fn list_discrepancies(
 }
 
 /// PATCH /admin/reconciliation/discrepancies/:id/resolve
-async fn resolve_discrepancy(
+#[utoipa::path(
+    patch,
+    path = "/admin/reconciliation/discrepancies/{id}/resolve",
+    tag = "admin",
+    summary = "Resolve a reconciliation discrepancy",
+    params(("id" = Uuid, Path, description = "Discrepancy ID")),
+    request_body = ResolveDiscrepancyRequest,
+    responses(
+        (status = 200, description = "Discrepancy resolved"),
+        (status = 404, description = "Discrepancy not found or already resolved"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn resolve_discrepancy(
     State(state): State<Arc<ReconciliationState>>,
     Path(id): Path<Uuid>,
     Json(body): Json<ResolveDiscrepancyRequest>,
@@ -156,7 +187,18 @@ async fn resolve_discrepancy(
 }
 
 /// GET /admin/reconciliation/reports
-async fn list_reports(State(state): State<Arc<ReconciliationState>>) -> impl IntoResponse {
+#[utoipa::path(
+    get,
+    path = "/admin/reconciliation/reports",
+    tag = "admin",
+    summary = "List reconciliation reports",
+    responses(
+        (status = 200, description = "Reconciliation reports (last 30)", body = Vec<ReportRow>),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn list_reports(State(state): State<Arc<ReconciliationState>>) -> impl IntoResponse {
     let rows = sqlx::query!(
         r#"
         SELECT id, report_date, total_transactions, matched_count, discrepancy_count,
@@ -199,7 +241,22 @@ async fn list_reports(State(state): State<Arc<ReconciliationState>>) -> impl Int
 
 /// PATCH /admin/reconciliation/reports/:date/close
 /// Prevents closing a period if open discrepancies exist.
-async fn close_period(
+#[utoipa::path(
+    patch,
+    path = "/admin/reconciliation/reports/{date}/close",
+    tag = "admin",
+    summary = "Close a reconciliation period",
+    description = "Prevents closing a period if open discrepancies exist for that date.",
+    params(("date" = String, Path, description = "Report date (YYYY-MM-DD)")),
+    responses(
+        (status = 200, description = "Period closed"),
+        (status = 404, description = "Report not found for date"),
+        (status = 409, description = "Open discrepancies exist for this date"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn close_period(
     State(state): State<Arc<ReconciliationState>>,
     Path(date): Path<chrono::NaiveDate>,
 ) -> impl IntoResponse {

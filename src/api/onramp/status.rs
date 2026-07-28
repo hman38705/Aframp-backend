@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 /// State for the onramp status handler
@@ -326,6 +327,22 @@ impl OnrampStatusService {
 }
 
 /// HTTP handler for GET /api/onramp/status/:tx_id
+#[utoipa::path(
+    get,
+    path = "/api/onramp/status/{tx_id}",
+    tag = "onramp",
+    summary = "Get onramp transaction status",
+    description = "Retrieve the current status of an onramp transaction, including payment provider confirmation and on-chain cNGN delivery status. Responses are cached briefly with a TTL that depends on the transaction's current status.",
+    params(
+        ("tx_id" = String, Path, description = "Transaction ID (UUID)")
+    ),
+    responses(
+        (status = 200, description = "Transaction status retrieved", body = OnrampStatusResponse),
+        (status = 400, description = "tx_id is not a valid UUID"),
+        (status = 403, description = "Transaction does not belong to the requesting wallet"),
+        (status = 404, description = "Transaction not found")
+    )
+)]
 pub async fn get_onramp_status(
     State(service): State<Arc<OnrampStatusService>>,
     Path(tx_id): Path<String>,
@@ -340,7 +357,7 @@ pub async fn get_onramp_status(
 }
 
 /// Response structure for onramp status
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 pub struct OnrampStatusResponse {
     pub tx_id: String,
     pub status: String,
@@ -357,7 +374,7 @@ pub struct OnrampStatusResponse {
 }
 
 /// Transaction stage
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TransactionStage {
     AwaitingPayment,
@@ -368,12 +385,14 @@ pub enum TransactionStage {
 }
 
 /// Transaction detail
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 pub struct TransactionDetail {
     pub r#type: String,
     #[serde(with = "bigdecimal_serde")]
+    #[schema(value_type = String)]
     pub amount_ngn: sqlx::types::BigDecimal,
     #[serde(with = "bigdecimal_serde")]
+    #[schema(value_type = String)]
     pub amount_cngn: sqlx::types::BigDecimal,
     pub fees: TransactionFees,
     pub provider: String,
@@ -386,13 +405,16 @@ pub struct TransactionDetail {
 }
 
 /// Transaction fees
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 pub struct TransactionFees {
     #[serde(with = "bigdecimal_serde")]
+    #[schema(value_type = String)]
     pub platform_fee_ngn: sqlx::types::BigDecimal,
     #[serde(with = "bigdecimal_serde")]
+    #[schema(value_type = String)]
     pub provider_fee_ngn: sqlx::types::BigDecimal,
     #[serde(with = "bigdecimal_serde")]
+    #[schema(value_type = String)]
     pub total_fee_ngn: sqlx::types::BigDecimal,
 }
 
@@ -418,7 +440,7 @@ mod bigdecimal_serde {
 }
 
 /// Provider status
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 pub struct ProviderStatus {
     pub confirmed: bool,
     pub reference: String,
@@ -429,7 +451,7 @@ pub struct ProviderStatus {
 }
 
 /// Blockchain status
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 pub struct BlockchainStatus {
     pub stellar_tx_hash: String,
     pub confirmations: u32,
@@ -440,7 +462,7 @@ pub struct BlockchainStatus {
 }
 
 /// Timeline entry
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 pub struct TimelineEntry {
     pub status: String,
     pub timestamp: DateTime<Utc>,

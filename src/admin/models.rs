@@ -2,10 +2,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::collections::HashMap;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 // Admin role enumeration
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
 #[sqlx(type_name = "admin_role", rename_all = "snake_case")]
 pub enum AdminRole {
     SuperAdmin,
@@ -28,7 +29,7 @@ impl AdminRole {
 }
 
 // Admin status enumeration
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, ToSchema)]
 #[sqlx(type_name = "admin_status", rename_all = "snake_case")]
 pub enum AdminStatus {
     PendingSetup,
@@ -38,7 +39,7 @@ pub enum AdminStatus {
 }
 
 // MFA status enumeration
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, ToSchema)]
 #[sqlx(type_name = "mfa_status", rename_all = "snake_case")]
 pub enum MfaStatus {
     NotConfigured,
@@ -57,7 +58,7 @@ pub enum SessionStatus {
 }
 
 // Audit action type enumeration
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, ToSchema)]
 #[sqlx(type_name = "audit_action_type", rename_all = "snake_case")]
 pub enum AuditActionType {
     AccountCreated,
@@ -84,7 +85,7 @@ pub enum AuditActionType {
 }
 
 // Admin role configuration
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, ToSchema)]
 pub struct AdminRoleConfig {
     pub id: AdminRole,
     pub description: String,
@@ -97,7 +98,7 @@ pub struct AdminRoleConfig {
 }
 
 // Permission model
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, ToSchema)]
 pub struct AdminPermission {
     pub id: Uuid,
     pub name: String,
@@ -117,7 +118,7 @@ pub struct AdminRolePermission {
 }
 
 // Admin account model
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, ToSchema)]
 pub struct AdminAccount {
     pub id: Uuid,
     pub full_name: String,
@@ -140,7 +141,7 @@ pub struct AdminAccount {
 }
 
 // Admin account creation request
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CreateAdminAccountRequest {
     pub full_name: String,
     pub email: String,
@@ -174,7 +175,7 @@ pub struct AdminSession {
 }
 
 // Active admin session view
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, ToSchema)]
 pub struct ActiveAdminSession {
     pub id: Uuid,
     pub admin_id: Uuid,

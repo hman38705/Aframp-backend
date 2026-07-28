@@ -11,12 +11,13 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::info;
+use utoipa::ToSchema;
 
 // ---------------------------------------------------------------------------
 // Request/Response Types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct DashboardStatusResponse {
     pub status: String,
     pub status_description: String,
@@ -29,7 +30,7 @@ pub struct DashboardStatusResponse {
     pub timestamp: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SystemHealthResponse {
     pub healthy: bool,
     pub status: String,
@@ -37,7 +38,7 @@ pub struct SystemHealthResponse {
     pub timestamp: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct HealthCheck {
     pub name: String,
     pub status: String,
@@ -45,14 +46,14 @@ pub struct HealthCheck {
     pub response_time_ms: Option<u64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AlertHistoryResponse {
     pub alerts: Vec<AlertEntry>,
     pub total_count: u64,
     pub last_24h: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AlertEntry {
     pub id: String,
     pub timestamp: String,
@@ -79,6 +80,17 @@ pub struct DashboardApiState {
 /// GET /api/dashboard/status
 ///
 /// Get current system status for dashboard display
+#[utoipa::path(
+    get,
+    path = "/api/dashboard/status",
+    tag = "admin",
+    summary = "Get dashboard status",
+    responses(
+        (status = 200, description = "Current system status", body = DashboardStatusResponse),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn get_dashboard_status(
     State(state): State<Arc<DashboardApiState>>,
 ) -> Result<impl IntoResponse, crate::error::AppError> {
@@ -105,6 +117,17 @@ pub async fn get_dashboard_status(
 /// GET /api/dashboard/health
 ///
 /// Get comprehensive system health check
+#[utoipa::path(
+    get,
+    path = "/api/dashboard/health",
+    tag = "admin",
+    summary = "Get comprehensive system health",
+    responses(
+        (status = 200, description = "System is healthy", body = SystemHealthResponse),
+        (status = 503, description = "System is degraded", body = SystemHealthResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn get_system_health(
     State(state): State<Arc<DashboardApiState>>,
 ) -> Result<impl IntoResponse, crate::error::AppError> {
@@ -163,6 +186,23 @@ pub async fn get_system_health(
 /// GET /api/dashboard/alerts
 ///
 /// Get recent alert history
+#[utoipa::path(
+    get,
+    path = "/api/dashboard/alerts",
+    tag = "admin",
+    summary = "Get recent alert history",
+    params(
+        ("limit" = Option<u64>, Query, description = "Maximum number of alerts (capped at 100)"),
+        ("offset" = Option<u64>, Query, description = "Pagination offset"),
+        ("severity" = Option<String>, Query, description = "Filter by severity"),
+        ("resolved" = Option<bool>, Query, description = "Filter by resolved state")
+    ),
+    responses(
+        (status = 200, description = "Alert history", body = AlertHistoryResponse),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn get_alert_history(
     State(state): State<Arc<DashboardApiState>>,
     Query(params): Query<AlertHistoryParams>,
@@ -187,6 +227,17 @@ pub async fn get_alert_history(
 /// GET /api/dashboard/metrics
 ///
 /// Get system metrics for monitoring
+#[utoipa::path(
+    get,
+    path = "/api/dashboard/metrics",
+    tag = "admin",
+    summary = "Get system metrics for monitoring",
+    responses(
+        (status = 200, description = "System metrics"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn get_system_metrics(
     State(state): State<Arc<DashboardApiState>>,
 ) -> Result<impl IntoResponse, crate::error::AppError> {
@@ -212,7 +263,7 @@ pub async fn get_system_metrics(
 // Query Parameters
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct AlertHistoryParams {
     pub limit: Option<u64>,
     pub offset: Option<u64>,

@@ -1,9 +1,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, ToSchema)]
 #[sqlx(type_name = "signer_role", rename_all = "snake_case")]
 pub enum SignerRole {
     Cfo,
@@ -22,7 +23,7 @@ impl SignerRole {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, ToSchema)]
 #[sqlx(type_name = "signer_status", rename_all = "snake_case")]
 pub enum SignerStatus {
     PendingOnboarding,
@@ -33,7 +34,7 @@ pub enum SignerStatus {
     Removed,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, ToSchema)]
 pub struct MintSigner {
     pub id: Uuid,
     pub full_legal_name: String,
@@ -53,7 +54,7 @@ pub struct MintSigner {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, ToSchema)]
 pub struct MintSignerChallenge {
     pub id: Uuid,
     pub signer_id: Uuid,
@@ -65,7 +66,7 @@ pub struct MintSignerChallenge {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, ToSchema)]
 pub struct MintSignerActivity {
     pub id: Uuid,
     pub signer_id: Uuid,
@@ -75,7 +76,7 @@ pub struct MintSignerActivity {
     pub ip_address: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, ToSchema)]
 pub struct MintSignerKeyRotation {
     pub id: Uuid,
     pub signer_id: Uuid,
@@ -87,7 +88,7 @@ pub struct MintSignerKeyRotation {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, ToSchema)]
 pub struct MintQuorumConfig {
     pub id: Uuid,
     pub required_threshold: i16,
@@ -96,7 +97,7 @@ pub struct MintQuorumConfig {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct InitiateOnboardingRequest {
     pub full_legal_name: String,
     pub role: SignerRole,
@@ -104,31 +105,31 @@ pub struct InitiateOnboardingRequest {
     pub contact_email: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CompleteOnboardingRequest {
     pub token: String,
     pub stellar_public_key: String,
     pub challenge_signature: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct RotateKeyRequest {
     pub new_stellar_public_key: String,
     pub challenge_signature: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct SuspendSignerRequest {
     pub reason: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateQuorumRequest {
     pub required_threshold: i16,
     pub min_role_diversity: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SignerSummary {
     pub id: Uuid,
     pub full_legal_name: String,
@@ -140,7 +141,7 @@ pub struct SignerSummary {
     pub key_expires_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct QuorumStatus {
     pub required_threshold: i16,
     pub active_signer_count: i64,

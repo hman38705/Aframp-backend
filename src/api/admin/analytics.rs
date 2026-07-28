@@ -22,6 +22,7 @@ use bigdecimal::ToPrimitive;
 use chrono::{Duration, Utc};
 use serde::Deserialize;
 use serde_json::json;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::api::analytics::models::{
@@ -45,7 +46,7 @@ pub struct AdminAnalyticsState {
 // Query params
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct PeriodQuery {
     pub days: Option<i64>,
 }
@@ -70,6 +71,19 @@ fn not_found(msg: &str) -> Response {
 // Handlers
 // ---------------------------------------------------------------------------
 
+/// GET /api/admin/analytics/wallets/overview
+#[utoipa::path(
+    get,
+    path = "/api/admin/analytics/wallets/overview",
+    tag = "admin",
+    summary = "Wallet analytics overview",
+    params(("days" = Option<i64>, Query, description = "Lookback window in days (default 30)")),
+    responses(
+        (status = 200, description = "Overview metrics", body = AdminOverviewResponse),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn get_overview(
     State(state): State<Arc<AdminAnalyticsState>>,
     Query(q): Query<PeriodQuery>,
@@ -110,6 +124,19 @@ pub async fn get_overview(
         .into_response()
 }
 
+/// GET /api/admin/analytics/wallets/activity
+#[utoipa::path(
+    get,
+    path = "/api/admin/analytics/wallets/activity",
+    tag = "admin",
+    summary = "Wallet analytics activity metrics",
+    params(("days" = Option<i64>, Query, description = "Lookback window in days (default 30)")),
+    responses(
+        (status = 200, description = "Activity metrics", body = AdminActivityResponse),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn get_activity(
     State(state): State<Arc<AdminAnalyticsState>>,
     Query(q): Query<PeriodQuery>,
@@ -159,6 +186,19 @@ pub async fn get_activity(
         .into_response()
 }
 
+/// GET /api/admin/analytics/wallets/retention
+#[utoipa::path(
+    get,
+    path = "/api/admin/analytics/wallets/retention",
+    tag = "admin",
+    summary = "Wallet retention metrics",
+    params(("days" = Option<i64>, Query, description = "Lookback window in days (default 30)")),
+    responses(
+        (status = 200, description = "Retention metrics", body = AdminRetentionResponse),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn get_retention(
     State(state): State<Arc<AdminAnalyticsState>>,
     Query(q): Query<PeriodQuery>,
@@ -198,6 +238,19 @@ pub async fn get_retention(
         .into_response()
 }
 
+/// GET /api/admin/analytics/wallets/cohorts
+#[utoipa::path(
+    get,
+    path = "/api/admin/analytics/wallets/cohorts",
+    tag = "admin",
+    summary = "Wallet cohort analysis",
+    params(("days" = Option<i64>, Query, description = "Lookback window in days (default 90)")),
+    responses(
+        (status = 200, description = "Cohort metrics", body = AdminCohortsResponse),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn get_cohorts(
     State(state): State<Arc<AdminAnalyticsState>>,
     Query(q): Query<PeriodQuery>,
@@ -231,6 +284,18 @@ pub async fn get_cohorts(
     (StatusCode::OK, Json(AdminCohortsResponse { cohorts })).into_response()
 }
 
+/// GET /api/admin/analytics/wallets/risk-distribution
+#[utoipa::path(
+    get,
+    path = "/api/admin/analytics/wallets/risk-distribution",
+    tag = "admin",
+    summary = "Wallet risk score distribution",
+    responses(
+        (status = 200, description = "Risk distribution", body = AdminRiskDistributionResponse),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn get_risk_distribution(State(state): State<Arc<AdminAnalyticsState>>) -> Response {
     let dist = match state.repo.risk_score_distribution().await {
         Ok(d) => d,
@@ -268,6 +333,18 @@ pub async fn get_risk_distribution(State(state): State<Arc<AdminAnalyticsState>>
         .into_response()
 }
 
+/// GET /api/admin/analytics/wallets/anomalies
+#[utoipa::path(
+    get,
+    path = "/api/admin/analytics/wallets/anomalies",
+    tag = "admin",
+    summary = "List open wallet anomalies",
+    responses(
+        (status = 200, description = "Open anomalies", body = AdminAnomaliesResponse),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn get_anomalies(State(state): State<Arc<AdminAnalyticsState>>) -> Response {
     let rows = match state.repo.list_open_anomalies(100, 0).await {
         Ok(r) => r,
@@ -297,6 +374,20 @@ pub async fn get_anomalies(State(state): State<Arc<AdminAnalyticsState>>) -> Res
         .into_response()
 }
 
+/// GET /api/admin/wallets/{wallet_id}/behaviour-profile
+#[utoipa::path(
+    get,
+    path = "/api/admin/wallets/{wallet_id}/behaviour-profile",
+    tag = "admin",
+    summary = "Get a wallet's behaviour profile",
+    params(("wallet_id" = String, Path, description = "Wallet address")),
+    responses(
+        (status = 200, description = "Behaviour profile", body = BehaviourProfileResponse),
+        (status = 404, description = "Behaviour profile not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn get_behaviour_profile(
     State(state): State<Arc<AdminAnalyticsState>>,
     Path(wallet_id): Path<String>,
@@ -321,6 +412,18 @@ pub async fn get_behaviour_profile(
     }
 }
 
+/// POST /api/admin/analytics/wallets/export
+#[utoipa::path(
+    post,
+    path = "/api/admin/analytics/wallets/export",
+    tag = "admin",
+    summary = "Queue an admin wallet analytics export",
+    responses(
+        (status = 202, description = "Export queued", body = ExportResponse),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn export_admin_analytics(State(_state): State<Arc<AdminAnalyticsState>>) -> Response {
     let export_id = Uuid::new_v4();
     (

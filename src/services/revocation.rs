@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::{error, info, warn};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::cache::RedisCache;
@@ -31,7 +32,7 @@ pub const KEY_BLACKLIST_TTL_SECS: u64 = 365 * 24 * 3600;
 
 // ─── Domain types ─────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RevocationRecord {
     pub id: Uuid,
     pub key_id: Uuid,
@@ -43,7 +44,7 @@ pub struct RevocationRecord {
     pub revoked_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct BlacklistEntry {
     pub id: Uuid,
     pub consumer_id: Uuid,

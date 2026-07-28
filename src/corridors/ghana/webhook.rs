@@ -17,6 +17,17 @@ pub struct GhanaWebhookState {
 }
 
 /// POST /webhooks/hubtel_ghana
+#[utoipa::path(
+    post,
+    path = "/webhooks/hubtel_ghana",
+    tag = "webhooks",
+    summary = "Receive a Hubtel Ghana disbursement webhook",
+    description = "Receives Hubtel callback events for the Ghana corridor, mapping Hubtel status codes onto Aframp transaction states and queuing cNGN refunds on disbursement failure. Body is the raw Hubtel JSON payload (application/json). Not JWT-authenticated — trust is established via the Hubtel callback contract.",
+    responses(
+        (status = 200, description = "Webhook processed (always returns 200 to acknowledge receipt to Hubtel, even when the referenced transfer cannot be matched or updated)"),
+        (status = 400, description = "Invalid JSON payload")
+    )
+)]
 pub async fn handle_hubtel_ghana_webhook(
     State(state): State<Arc<GhanaWebhookState>>,
     body: String,

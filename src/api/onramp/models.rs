@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 /// Request to create an onramp quote
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct OnrampQuoteRequest {
     pub wallet_address: String,
     pub from_currency: String,
@@ -12,7 +13,7 @@ pub struct OnrampQuoteRequest {
 }
 
 /// Provider fee details
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ProviderFeeDetail {
     pub amount: String,
     pub percentage: f64,
@@ -20,14 +21,14 @@ pub struct ProviderFeeDetail {
 }
 
 /// Platform fee details
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PlatformFeeDetail {
     pub amount: String,
     pub percentage: f64,
 }
 
 /// Payment method fee details
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PaymentMethodFeeDetail {
     pub amount: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -35,7 +36,7 @@ pub struct PaymentMethodFeeDetail {
 }
 
 /// Complete fee breakdown
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FeeBreakdown {
     pub provider_fee: ProviderFeeDetail,
     pub platform_fee: PlatformFeeDetail,
@@ -44,7 +45,7 @@ pub struct FeeBreakdown {
 }
 
 /// Breakdown details
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Breakdown {
     pub you_pay: String,
     pub you_receive: String,
@@ -52,7 +53,7 @@ pub struct Breakdown {
 }
 
 /// Trustline status
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TrustlineStatus {
     pub exists: bool,
     pub ready_to_receive: bool,
@@ -73,14 +74,14 @@ pub struct TrustlineRequirements {
 }
 
 /// Validity information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Validity {
     pub expires_at: String,
     pub expires_in_seconds: i64,
 }
 
 /// Next steps guidance
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct NextSteps {
     pub endpoint: String,
     pub method: String,
@@ -88,7 +89,7 @@ pub struct NextSteps {
 }
 
 /// Response containing the quote details (with trustline)
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct OnrampQuoteResponse {
     pub quote_id: String,
     pub wallet_address: String,
