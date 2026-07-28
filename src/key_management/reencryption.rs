@@ -80,12 +80,25 @@ impl ReencryptionService {
     ) -> Result<Vec<ReencryptionJob>, ReencryptionError> {
         let mut jobs = Vec::new();
         for table in ENCRYPTED_TABLES {
-            let total: i64 = sqlx::query_scalar(&format!(
-                "SELECT COUNT(*) FROM {table} WHERE encrypted_key_version IS NOT NULL"
-            ))
-            .fetch_one(&self.pool)
-            .await
-            .unwrap_or(0i64);
+            // Use an allowlist match to avoid format!()-based SQL interpolation
+            // (issue #720). ENCRYPTED_TABLES is static but we enforce it explicitly.
+            let count_sql = match *table {
+                "kyc_documents" =>
+                    "SELECT COUNT(*) FROM kyc_documents WHERE encrypted_key_version IS NOT NULL",
+                "bank_accounts" =>
+                    "SELECT COUNT(*) FROM bank_accounts WHERE encrypted_key_version IS NOT NULL",
+                "mobile_money_accounts" =>
+                    "SELECT COUNT(*) FROM mobile_money_accounts WHERE encrypted_key_version IS NOT NULL",
+                other => {
+                    return Err(ReencryptionError::Database(sqlx::Error::Protocol(
+                        format!("Unknown encrypted table: {other}"),
+                    )));
+                }
+            };
+            let total: i64 = sqlx::query_scalar(count_sql)
+                .fetch_one(&self.pool)
+                .await
+                .unwrap_or(0i64);
 
             let job = sqlx::query_as!(
                 ReencryptionJob,

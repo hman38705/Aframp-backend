@@ -160,6 +160,24 @@ jobs:
             -D warnings \
             -D clippy::unwrap_used \
             -D clippy::expect_used
+      - name: Detect SQL injection patterns (issue #720)
+        # Ensures no format!() strings are passed directly to sqlx::query/query_as/query_scalar.
+        # All user-influenced values must be bound as parameters via .bind().
+        # Table/column identifiers must go through validate_identifier() before use.
+        run: |
+          set +e
+          MATCHES=$(grep -rn --include='*.rs' \
+            -E 'sqlx::query(_as|_scalar|_scalar_unchecked)?\s*\(&\s*format!' \
+            src/)
+          if [ -n "$MATCHES" ]; then
+            echo "❌ SQL injection risk: format!() strings passed to sqlx::query functions:"
+            echo "$MATCHES"
+            echo ""
+            echo "Fix: use parameterized queries with .bind() or sqlx::query! macro."
+            echo "See issue #720 for guidance."
+            exit 1
+          fi
+          echo "✅ No SQL injection patterns found."
 
   # ── Unit tests + coverage ───────────────────────────────────────────────────
   unit-tests:
