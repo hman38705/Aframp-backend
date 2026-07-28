@@ -15,7 +15,9 @@ pub mod partner;
 pub mod por;
 pub mod rates;
 pub mod recurring;
-pub mod service_admin;
+// service_admin: depends on the deleted service_auth module (never restored
+// after the dd3c49f cleanup) and isn't mounted in main.rs — excluded from
+// compilation rather than restoring service_auth wholesale.
 pub mod transaction_history;
 pub mod transparency;
 pub mod wallet;

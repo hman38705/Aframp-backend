@@ -31,6 +31,8 @@ pub struct OnrampInitiateState {
     pub cngn_issuer: String,
     pub circuit_breaker: Arc<CircuitBreakerMiddleware>,
     pub anomaly_service: Arc<AnomalyDetectionService>,
+    /// Optional Travel Rule service — None in test/dev without DB
+    pub travel_rule_service: Option<Arc<crate::travel_rule::TravelRuleService>>,
 }
 
 // ── Request / Response ────────────────────────────────────────────────────────
@@ -270,6 +272,71 @@ pub async fn initiate_onramp(
         })?;
 
     let tx_id = transaction.transaction_id.to_string();
+
+    // 7b. Travel Rule gate — checks threshold and blocks the mint until originator
+    //     identification is present. Onramp mints go to the requesting customer's own
+    //     wallet (self-custodial, no counterparty VASP), so originator and beneficiary
+    //     both describe the same customer.
+    if let Some(tr_svc) = &state.travel_rule_service {
+        use crate::travel_rule::models::{
+            InitiateTravelRuleRequest, Ivms101NaturalPerson, Ivms101Person,
+        };
+        use rust_decimal::Decimal;
+        use std::str::FromStr;
+
+        let amount_dec = Decimal::from_str(&amount_ngn.to_string()).unwrap_or(Decimal::ZERO);
+        let requires_tr = tr_svc
+            .requires_travel_rule(amount_dec, "NGN", "onramp", "NG")
+            .await;
+
+        if requires_tr {
+            let customer_name = req
+                .customer_email
+                .as_deref()
+                .and_then(|e| e.split('@').next())
+                .or(req.customer_phone.as_deref())
+                .unwrap_or("onramp-customer")
+                .to_string();
+
+            let customer = Ivms101Person::Natural(Ivms101NaturalPerson {
+                first_name: customer_name,
+                last_name: "".into(),
+                date_of_birth: None,
+                national_id: None,
+                address: None,
+                country_of_residence: Some("NG".into()),
+                account_number: Some(req.wallet_address.clone()),
+            });
+
+            let tr_req = InitiateTravelRuleRequest {
+                transaction_id: tx_id.clone(),
+                beneficiary_vasp_id: "unhosted".into(),
+                originator: customer.clone(),
+                beneficiary: customer,
+                transfer_amount: amount_ngn.to_string(),
+                asset_code: "cNGN".into(),
+                destination_address: Some(req.wallet_address.clone()),
+            };
+
+            if let Err(e) = tr_svc.initiate_outbound(tr_req).await {
+                error!(
+                    transaction_id = %tx_id,
+                    error = %e,
+                    "Travel Rule compliance check failed for onramp — blocking mint"
+                );
+                let _ = state
+                    .transaction_repo
+                    .update_error(&tx_id, &format!("Travel Rule compliance check failed: {}", e))
+                    .await;
+                return Err(AppError::new(AppErrorKind::Domain(DomainError::Forbidden {
+                    message: format!(
+                        "This transfer requires originator information to be verified before it can proceed: {}",
+                        e
+                    ),
+                })));
+            }
+        }
+    }
 
     // Record mint event for anomaly detection (velocity tracking)
     if let Ok(amount_ngn_u64) = amount_ngn.to_string().parse::<u64>() {

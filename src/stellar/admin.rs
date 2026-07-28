@@ -189,6 +189,7 @@ pub enum AdminError {
     BadRequest(String),
     InternalError(String),
     Unauthorized,
+    TooManyRequests(String),
 }
 
 impl IntoResponse for AdminError {
@@ -198,6 +199,7 @@ impl IntoResponse for AdminError {
             AdminError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             AdminError::InternalError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
             AdminError::Unauthorized => (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()),
+            AdminError::TooManyRequests(msg) => (StatusCode::TOO_MANY_REQUESTS, msg),
         };
 
         (
@@ -220,7 +222,12 @@ impl From<sqlx::Error> for AdminError {
 
 impl From<crate::stellar::error::SubmissionError> for AdminError {
     fn from(err: crate::stellar::error::SubmissionError) -> Self {
-        AdminError::InternalError(err.to_string())
+        match err {
+            crate::stellar::error::SubmissionError::QueueTimeout { .. } => {
+                AdminError::TooManyRequests(err.to_string())
+            }
+            other => AdminError::InternalError(other.to_string()),
+        }
     }
 }
 

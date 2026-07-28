@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::PgPool;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::database::metrics as db_metrics;
 
@@ -23,6 +23,19 @@ pub const DEFAULT_THRESHOLD_MS: i64 = 100;
 
 /// Hysteresis: breaker closes again when lag drops below this fraction of the threshold.
 const HYSTERESIS_FACTOR: f64 = 0.5;
+
+/// Env var used to override `DEFAULT_THRESHOLD_MS` without recompiling, so
+/// prod/dev replicas on different hardware can each set their own threshold.
+const THRESHOLD_MS_ENV_VAR: &str = "REPLICATION_LAG_THRESHOLD_MS";
+
+/// Resolve the lag threshold: `REPLICATION_LAG_THRESHOLD_MS` env var if set
+/// and parseable, otherwise `DEFAULT_THRESHOLD_MS`.
+pub fn threshold_ms_from_env() -> i64 {
+    std::env::var(THRESHOLD_MS_ENV_VAR)
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(DEFAULT_THRESHOLD_MS)
+}
 
 // ---------------------------------------------------------------------------
 // ReplicationMonitor
@@ -85,7 +98,16 @@ impl ReplicationMonitor {
                 self.inner.breaker_open.store(false, Ordering::Relaxed);
             }
             Err(e) => {
-                warn!(replica=%self.inner.replica_label, "Replication lag query failed: {e}");
+                // pg_stat_replication only exists on the primary. If this monitor is
+                // pointed at a replica (or the query fails for any other reason), we
+                // cannot verify lag is within bounds — fail safe by opening the
+                // breaker instead of silently keeping the last-known (possibly
+                // healthy) state, which would give a false healthy signal.
+                self.inner.breaker_open.store(true, Ordering::Relaxed);
+                error!(
+                    replica=%self.inner.replica_label,
+                    "Replication lag query failed — opening circuit breaker (fail-safe): {e}"
+                );
             }
         }
     }

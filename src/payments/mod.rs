@@ -19,6 +19,8 @@ pub mod types;
 pub mod utils;
 #[cfg(feature = "database")]
 pub mod circuit_breaker;
+#[cfg(feature = "database")]
+pub mod webhook_replay;
 
 #[cfg(feature = "database")]
 pub use error::{PaymentError, PaymentResult};

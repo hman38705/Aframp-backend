@@ -14,8 +14,15 @@ pub mod catalogue;
 pub mod emergency;
 pub mod escrow;
 pub mod metrics;
+pub mod provider;
 pub mod reencryption;
 pub mod rotation;
 
 #[cfg(test)]
 pub mod tests;
+
+// Re-export the most commonly needed types for convenience.
+pub use provider::{
+    key_provider_from_env, AwsSecretsManagerKeyProvider, EnvKeyProvider, KeyProvider,
+    KeyProviderError, KeyProviderKind, VaultKeyProvider, ZeroizingKey,
+};

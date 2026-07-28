@@ -416,6 +416,45 @@ impl PaymentProvider for MpesaKenyaProvider {
             }
         })?;
 
+        // STK Push (customer-initiated) callback envelope:
+        // { "Body": { "stkCallback": { "MerchantRequestID": "...",
+        //             "CheckoutRequestID": "...", "ResultCode": 1032,
+        //             "ResultDesc": "..." } } }
+        // ResultCode 1032 is returned when the customer does not respond to
+        // the STK prompt within the ~30s window; treat it as a failed
+        // (cancelled/timed out) payment rather than leaving it unparsed.
+        if let Some(stk_callback) = parsed.pointer("/Body/stkCallback") {
+            let result_code = stk_callback
+                .get("ResultCode")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(-1);
+            let checkout_request_id = stk_callback
+                .get("CheckoutRequestID")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            if result_code != 0 {
+                let failure_reason = stk_callback
+                    .get("ResultDesc")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(Self::result_code_description(result_code));
+                warn!(
+                    result_code = result_code,
+                    description = %failure_reason,
+                    checkout_request_id = ?checkout_request_id,
+                    "M-Pesa STK Push failed or timed out waiting for customer response"
+                );
+            }
+            return Ok(WebhookEvent {
+                provider: ProviderName::Mpesa,
+                event_type: format!("stk.result.{}", result_code),
+                transaction_reference: checkout_request_id.clone(),
+                provider_reference: checkout_request_id,
+                status: Some(Self::map_result_code(result_code)),
+                payload: parsed.clone(),
+                received_at: chrono::Utc::now().to_rfc3339(),
+            });
+        }
+
         // Daraja B2C result envelope:
         // { "Result": { "ResultCode": 0, "ResultDesc": "...",
         //               "OriginatorConversationID": "...",

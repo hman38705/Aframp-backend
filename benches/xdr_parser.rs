@@ -9,7 +9,7 @@ use bytes::BufMut;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 // Re-use the parser directly from the library crate.
-use Bitmesh_backend::chains::stellar::xdr_parser::{
+use aframp_backend::chains::stellar::xdr_parser::{
     parse_envelope, pool::BufferPool, ENVELOPE_TYPE_TX, MIN_TX_V1_LEN,
 };
 

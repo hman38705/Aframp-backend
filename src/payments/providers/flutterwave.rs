@@ -172,6 +172,13 @@ impl PaymentProvider for FlutterwaveProvider {
             }
         });
 
+        // Flutterwave dedupes payment initiation requests by tx_ref, so we
+        // must send the same tx_ref-derived idempotency key on every retry
+        // of this call. Otherwise a network error after Flutterwave already
+        // created the charge (but before we received the response) would
+        // cause a retry to create a duplicate charge.
+        let idempotency_key = format!("aframp-{}", request.transaction_reference);
+
         let raw: FlutterwaveEnvelope = self
             .http
             .request_json(
@@ -179,7 +186,10 @@ impl PaymentProvider for FlutterwaveProvider {
                 &self.endpoint("/payments"),
                 Some(&self.config.secret_key),
                 Some(&payload),
-                &[("Content-Type", "application/json")],
+                &[
+                    ("Content-Type", "application/json"),
+                    ("Idempotency-Key", idempotency_key.as_str()),
+                ],
             )
             .await
             .map_err(|e| match e {

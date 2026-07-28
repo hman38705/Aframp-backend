@@ -72,18 +72,11 @@ impl<T: Clone + Send + 'static> SingleFlight<T> {
         match role {
             Role::Waiter(mut rx) => {
                 debug!(key, "single-flight: waiting for in-flight rebuild");
-                match rx.recv().await {
-                    Ok(result) => (*result).clone().map_err(|e| e.clone()),
-                    Err(_) => Err(format!(
+                match timeout(DEFAULT_IN_FLIGHT_TIMEOUT, rx.recv()).await {
+                    Ok(Ok(result)) => (*result).clone().map_err(|e| e.clone()),
+                    Ok(Err(_)) => Err(format!(
                         "single-flight leader for {key} ended without producing a result"
                     )),
-                match timeout(DEFAULT_IN_FLIGHT_TIMEOUT, rx.recv()).await {
-                    Ok(Ok(result)) => {
-                        return (*result).clone().map_err(|e| e.clone());
-                    }
-                    Ok(Err(_)) => {
-                        // Sender dropped without sending — treat as miss and rebuild.
-                    }
                     Err(_) => {
                         // The leader has been rebuilding longer than the
                         // self-heal timeout. Clear the stale entry so this
@@ -95,24 +88,50 @@ impl<T: Clone + Send + 'static> SingleFlight<T> {
                             "single-flight: in-flight rebuild timed out; self-healing"
                         );
                         self.in_flight.lock().await.remove(key);
+                        Err(format!(
+                            "single-flight leader for {key} timed out after {}s",
+                            DEFAULT_IN_FLIGHT_TIMEOUT.as_secs()
+                        ))
                     }
                 }
             }
             Role::Leader(tx) => {
                 info!(key, "single-flight: leader rebuilding cache entry");
-                let result = rebuild().await;
-                let shared: SharedResult<T> = Arc::new(result.clone().map_err(|e| e.to_string()));
+                let result: Result<T, String> = match AssertUnwindSafe(rebuild()).catch_unwind().await
+                {
+                    Ok(result) => result,
+                    Err(panic) => {
+                        let msg = panic_message(panic.as_ref());
+                        error!(key, error = %msg, "single-flight: rebuilder panicked");
+                        Err(format!("rebuild panicked: {}", msg))
+                    }
+                };
+
+                let shared: SharedResult<T> = Arc::new(result.clone());
 
                 // Broadcast result to all waiters (ignore send errors — no subscribers is fine).
                 let _ = tx.send(shared);
 
-                // Remove from in-flight map.
+                // Remove from in-flight map — always, whether the rebuild succeeded,
+                // returned Err, or panicked, so the key is never stuck.
                 let mut map = self.in_flight.lock().await;
                 map.remove(key);
 
                 result
             }
         }
+    }
+}
+
+/// Best-effort extraction of a human-readable message from a caught panic
+/// payload (`std::panic::catch_unwind`'s `Box<dyn Any + Send>`).
+fn panic_message(panic: &(dyn Any + Send)) -> String {
+    if let Some(s) = panic.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = panic.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "non-string panic payload".to_string()
     }
 }
 
@@ -144,17 +163,6 @@ mod tests {
         for h in handles {
             assert_eq!(h.await.unwrap().unwrap(), 42);
         }
-        info!(key, "single-flight: leader rebuilding cache entry");
-        let result: Result<T, String> = match AssertUnwindSafe(rebuild()).catch_unwind().await {
-            Ok(result) => result,
-            Err(panic) => {
-                let msg = panic_message(panic.as_ref());
-                error!(key, error = %msg, "single-flight: rebuilder panicked");
-                Err(format!("rebuild panicked: {}", msg))
-            }
-        };
-
-        let shared: SharedResult<T> = Arc::new(result.clone());
 
         assert_eq!(
             calls.load(Ordering::SeqCst),
@@ -170,10 +178,6 @@ mod tests {
         let b = sf.get_or_rebuild("b", || async { Ok(2) }).await.unwrap();
         assert_eq!((a, b), (1, 2));
     }
-        // Remove from in-flight map — always, whether the rebuild succeeded,
-        // returned Err, or panicked, so the key is never stuck.
-        let mut map = self.in_flight.lock().await;
-        map.remove(key);
 
     #[tokio::test]
     async fn test_rebuild_error_is_propagated() {
@@ -183,23 +187,6 @@ mod tests {
             .await;
         assert_eq!(result, Err("boom".to_string()));
     }
-}
-
-/// Best-effort extraction of a human-readable message from a caught panic
-/// payload (`std::panic::catch_unwind`'s `Box<dyn Any + Send>`).
-fn panic_message(panic: &(dyn Any + Send)) -> String {
-    if let Some(s) = panic.downcast_ref::<&str>() {
-        s.to_string()
-    } else if let Some(s) = panic.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "non-string panic payload".to_string()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 
     #[tokio::test]
     async fn test_successful_rebuild_returns_value() {
