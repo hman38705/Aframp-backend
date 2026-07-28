@@ -1846,6 +1846,41 @@ async fn main() -> anyhow::Result<()> {
         Router::new()
     };
 
+    // ── Collateral Verification Engine (Proof-of-Reserve, cNGN) ──────────────
+    let verification_routes = if let (Some(pool), Some(client)) =
+        (db_pool.clone(), stellar_client.clone())
+    {
+        let verification_engine = std::sync::Arc::new(
+            verification::VerificationEngine::new(std::sync::Arc::new(client), pool.clone()),
+        );
+        let verification_repo = std::sync::Arc::new(verification::repository::VerificationRepository::new(pool));
+        // Start the scheduled proof-of-reserve worker
+        let verification_worker = verification::worker::VerificationWorker::new(verification_engine.clone());
+        tokio::spawn(verification_worker.run(worker_shutdown_rx.clone()));
+        let verification_state = std::sync::Arc::new(verification::handler::VerificationState {
+            engine: verification_engine,
+            repo: verification_repo,
+        });
+        info!("✅ Collateral verification routes enabled");
+        Router::new()
+            .route(
+                "/api/internal/verification/latest",
+                get(verification::handler::get_latest),
+            )
+            .route(
+                "/api/internal/verification/history",
+                get(verification::handler::get_history),
+            )
+            .route(
+                "/api/internal/verification/trigger",
+                post(verification::handler::trigger_verification),
+            )
+            .with_state(verification_state)
+    } else {
+        info!("⏭️  Skipping collateral verification routes (missing db pool or stellar client)");
+        Router::new()
+    };
+
     // ── Compliance Effectiveness Reporting (AML/KYC KPI Reports) ─────────────
     let compliance_effectiveness_routes = if let Some(ref pool) = db_pool {
         let ce_repo = std::sync::Arc::new(
@@ -2382,6 +2417,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(audit_routes)
         .merge(sar_routes)
         .merge(compliance_effectiveness_routes)
+        .merge(verification_routes)
         .merge(stellar_throughput_routes)
         .merge(kyb_routes)
         .merge(key_rotation_routes)
