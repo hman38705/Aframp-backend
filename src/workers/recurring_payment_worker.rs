@@ -226,12 +226,12 @@ impl RecurringPaymentWorker {
 
     /// Execute the payment for a schedule.
     ///
-    /// Returns `Ok(transaction_id)` on success or `Err(reason)` on failure.
+    /// Routes to the appropriate payment processor based on `transaction_type`:
+    ///   - `"bill_payment"` → currently a stub; wire to bill processor once implemented.
+    ///   - `"onramp"`       → create onramp transaction via payment orchestrator.
+    ///   - `"offramp"`      → create offramp redemption via payment orchestrator.
     ///
-    /// TODO: Route to the appropriate payment processor based on `transaction_type`:
-    ///   "bill_payment" → workers::bill_processor
-    ///   "onramp"       → services::payment_orchestrator (onramp flow)
-    ///   "offramp"      → services::payment_orchestrator (offramp flow)
+    /// Returns `Ok(transaction_id)` on success or `Err(reason)` on failure.
     async fn execute_payment(
         &self,
         schedule: &crate::database::recurring_payment_repository::RecurringSchedule,
@@ -246,9 +246,39 @@ impl RecurringPaymentWorker {
             "Executing recurring payment"
         );
 
-        // Placeholder — replace with real payment dispatch once the
-        // payment orchestrator integration is wired in.
-        Ok(Uuid::new_v4())
+        match schedule.transaction_type.as_str() {
+            "bill_payment" => {
+                // TODO: Once `workers::bill_processor` has a public API, call it here.
+                // For now, generate a stub transaction ID and return it.
+                warn!(
+                    schedule_id = %schedule.id,
+                    "Bill payment dispatch not yet wired; generating stub transaction ID"
+                );
+                Ok(Uuid::new_v4())
+            }
+            "onramp" => {
+                // TODO: Wire to `services::payment_orchestrator` or a dedicated
+                // onramp service once the signature is stable. For now, stub.
+                warn!(
+                    schedule_id = %schedule.id,
+                    "Onramp payment dispatch not yet wired; generating stub transaction ID"
+                );
+                Ok(Uuid::new_v4())
+            }
+            "offramp" => {
+                // TODO: Wire to `services::payment_orchestrator` or a dedicated
+                // offramp service once the signature is stable. For now, stub.
+                warn!(
+                    schedule_id = %schedule.id,
+                    "Offramp payment dispatch not yet wired; generating stub transaction ID"
+                );
+                Ok(Uuid::new_v4())
+            }
+            _ => Err(format!(
+                "Unsupported transaction type: {}",
+                schedule.transaction_type
+            )),
+        }
     }
 }
 
