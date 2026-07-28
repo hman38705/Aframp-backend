@@ -13,7 +13,7 @@ use crate::cache::{Cache, RedisCache};
 
 // ── TTL constants ────────────────────────────────────────────────────────────
 
-pub const ACCESS_TOKEN_TTL_SECS: i64 = 3_600; // 1 hour
+pub const ACCESS_TOKEN_TTL_SECS: i64 = 900; // 15 minutes (financial platform: keep access tokens short-lived, rely on refresh tokens for long sessions)
 pub const REFRESH_TOKEN_TTL_SECS: i64 = 1_209_600; // 14 days
 
 // ── Token types & scopes ─────────────────────────────────────────────────────

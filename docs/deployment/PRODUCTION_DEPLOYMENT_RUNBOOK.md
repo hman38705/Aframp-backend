@@ -54,3 +54,25 @@ If another engineer (or CI run) holds the state lock, `apply`/`plan` will
 block with a `ConditionalCheckFailedException` until it's released — do not
 force-unlock (`terraform force-unlock`) unless you've confirmed the other
 run is actually dead.
+
+## Production Deployment Procedure
+
+1. **Pre-deployment checks**
+   - Confirm CI is green on the commit being deployed (unit tests, e2e tests, lint).
+   - Confirm load tests have passed against staging for the same commit.
+   - Announce the deployment window in the team channel.
+
+2. **Deploy**
+   - Apply Terraform changes (see above) if infrastructure changed.
+   - Trigger the production deployment workflow for the application.
+   - Monitor the rollout in the deployment dashboard until it reports healthy.
+
+3. **Post-deployment verification**
+   - Check health/readiness endpoints return 200.
+   - Check error rates and latency dashboards for regressions over the first 15 minutes.
+   - Run smoke tests against production.
+
+4. **Rollback**
+   - If verification fails, redeploy the previous known-good commit/artifact immediately.
+   - If the rollback involved a Terraform apply, revert the infra change and re-apply.
+   - File an incident report and link it from the deployment record.

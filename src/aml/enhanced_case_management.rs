@@ -19,8 +19,6 @@ use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 use rust_decimal::Decimal;
-// REMOVED: use crate::sar::service::SarService;
-// REMOVED: use crate::sar::models::DetectionMethod as SarDetectionMethod;
 
 #[derive(Debug, Clone)]
 pub struct EnhancedAMLCaseManager {
@@ -1032,71 +1030,19 @@ impl EnhancedAMLCaseManager {
         Ok(())
     }
 
-    async fn initiate_sar_filing(&self, case_id: &Uuid, decision: &CaseDecisionRequest) -> Result<(), anyhow::Error> {
-        // Load case details
-        let case = match self.get_case_by_id(case_id).await {
-            Ok(c) => c,
-            Err(e) => return Err(e),
-        };
-
-        // Determine activity window (last 30 days by default)
-        let end = Utc::now();
-        let start = end - Duration::days(30);
-        let date_range = ActivityDateRange { start_date: start, end_date: end };
-
-        // Load subject transactions for the activity window (best-effort)
-        let txns = match self.load_subject_transactions(&case.subject_kyc_id, &date_range).await {
-            Ok(t) => t,
-            Err(_) => Vec::new(),
-        };
-
-        // Compute totals
-        let total_amount_f64: f64 = txns.iter().map(|t| t.amount).sum();
-        let total_amount = Decimal::from_f64(total_amount_f64).unwrap_or(Decimal::ZERO);
-        let transaction_count = txns.len() as i32;
-
-        // Collect linked transaction IDs when available
-        let linked_transaction_ids: Vec<Uuid> = txns.iter().map(|t| t.id).collect();
-
-        // Prepare triggered rules placeholder (if no explicit rules available)
-        let triggered_rules = serde_json::json!([]);
-
-        // Parse assigned investigator UUID if present
-        let assigned_investigator_id = case
-            .assigned_investigator_id
-            .as_deref()
-            .and_then(|s| Uuid::parse_str(s).ok());
-
-        // Instantiate SAR service and auto-initiate a SAR (idempotent)
-        let sar_svc = SarService::new(self.database.clone());
-        let _ = sar_svc
-            .auto_initiate(
-                *case_id,
-                SarDetectionMethod::ComplianceOfficerJudgment,
-                Some(case.subject_kyc_id),
-                case.subject_wallet_addresses.clone(),
-                decision.rationale.clone(),
-                start.date_naive(),
-                end.date_naive(),
-                total_amount,
-                transaction_count,
-                linked_transaction_ids,
-                triggered_rules,
-                Some(case.risk_score_at_opening),
-                assigned_investigator_id,
-            )
-            .await
-            .map_err(|e| anyhow::anyhow!("failed to auto-initiate SAR: {}", e))?;
-
-        // Notify assigned investigator (if any)
+    async fn initiate_sar_filing(&self, case_id: &Uuid, _decision: &CaseDecisionRequest) -> Result<(), anyhow::Error> {
+        // TODO: Implement SAR filing. Previously delegated to the `sar` module,
+        // which was removed (see dd3c49f) and hasn't been restored; auto-SAR
+        // filing is currently unavailable. Still notify the assigned
+        // investigator so a suspicious decision doesn't pass silently.
+        let case = self.get_case_by_id(case_id).await?;
         if let Some(ref inv) = case.assigned_investigator_id {
             let _ = self.notifications.send_user_notification(
                 inv,
-                &format!("New SAR initiated for case {}", case.id),
-                &format!("A SAR has been created for case {}. Please review in the compliance portal.", case.id),
+                &format!("SAR filing required for case {}", case.id),
+                &format!("Case {} was marked suspicious but automated SAR filing is currently unavailable — file manually.", case.id),
             ).await;
         }
-
         Ok(())
     }
 

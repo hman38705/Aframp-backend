@@ -483,6 +483,13 @@ impl AdminAuthService {
             .update_password(admin_id, &request.new_password)
             .await?;
 
+        // Invalidate all existing sessions/JWTs and refresh tokens so a
+        // previously leaked token can no longer be used after the password
+        // change. The caller must re-authenticate to get a fresh session.
+        self.session_repo
+            .terminate_all_sessions(admin_id, None)
+            .await?;
+
         // Log password change
         self.audit_repo
             .create_audit_entry(

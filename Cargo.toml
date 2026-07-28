@@ -114,6 +114,8 @@ openssl        = { version = "0.10", features = ["vendored"], optional = true }
 
 # --- Auth ---
 totp-rs      = { version = "5.1", optional = true }
+# TODO(security): declared under the `database` feature but no routes/handlers implement
+# WebAuthn registration or authentication yet. Either wire up the flow or drop this dep.
 webauthn-rs  = { version = "0.5", optional = true }
 jsonwebtoken = { version = "9.3", optional = true }
 rsa          = { version = "0.9",  features = ["sha2", "pem"], optional = true }
@@ -320,6 +322,16 @@ name = "kyc_monthly_volume_reset_integration"
 path = "tests/kyc_monthly_volume_reset_integration.rs"
 required-features = ["database"]
 
+[[test]]
+name = "auth_brute_force_test"
+path = "tests/auth_brute_force_test.rs"
+required-features = ["cache"]
+
+[[test]]
+name = "replay_prevention_providers_test"
+path = "tests/replay_prevention_providers_test.rs"
+required-features = ["cache"]
+
 # ---------------------------------------------------------------------------
 # Examples
 # ---------------------------------------------------------------------------
@@ -331,6 +343,15 @@ required-features = ["database", "cache"]
 [[example]]
 name = "stellar_demo"
 path = "examples/stellar_demo.rs"
+required-features = ["database"]
+
+# ---------------------------------------------------------------------------
+# Benchmarks
+# ---------------------------------------------------------------------------
+[[bench]]
+name = "xdr_parser"
+path = "benches/xdr_parser.rs"
+harness = false
 required-features = ["database"]
 
 # ---------------------------------------------------------------------------
@@ -349,5 +370,4 @@ bigdecimal  = "0.4"
 proptest    = "1.4"
 base64      = "0.22.1"
 uuid        = { version = "1.6", features = ["v4"] }
-testcontainers         = "0.23"
-testcontainers-modules = { version = "0.11", features = ["postgres"] }
+criterion   = "0.5"

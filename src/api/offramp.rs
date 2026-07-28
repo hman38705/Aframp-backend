@@ -526,7 +526,7 @@ pub async fn initiate_withdrawal(
     //     conversion) and high-risk corridor. pending_travel_rule on the exchange
     //     record is the operator-visible hold indicator.
     if let Some(tr_svc) = &state.travel_rule_service {
-// REMOVED:         use crate::travel_rule::models::{
+        use crate::travel_rule::models::{
             InitiateTravelRuleRequest, Ivms101NaturalPerson, Ivms101Person,
         };
         use rust_decimal::Decimal;
@@ -579,10 +579,20 @@ pub async fn initiate_withdrawal(
                 destination_address: None,
             };
             if let Err(e) = tr_svc.initiate_outbound(tr_req).await {
-                warn!(
+                error!(
                     transaction_id = %tx_id,
                     error = %e,
-                    "Travel Rule initiation failed for offramp — proceeding with enhanced monitoring"
+                    "Travel Rule compliance check failed for offramp — blocking withdrawal"
+                );
+                let tx_repo = TransactionRepository::new((*state.db_pool).clone());
+                let _ = tx_repo
+                    .update_error(&tx_id, &format!("Travel Rule compliance check failed: {}", e))
+                    .await;
+                return create_error_response(
+                    422,
+                    "TRAVEL_RULE_REQUIRED",
+                    "This transfer requires originator and beneficiary information to be verified before it can proceed".to_string(),
+                    Some(e.to_string()),
                 );
             }
         }
@@ -667,6 +677,30 @@ pub async fn initiate_withdrawal(
 }
 
 // ===== ERROR HANDLING =====
+
+/// Build a raw structured error response with a given HTTP status code.
+fn create_error_response(
+    status: u16,
+    code: &str,
+    message: String,
+    details: Option<String>,
+) -> Response {
+    let detail = ErrorResponseDetail {
+        code: code.to_string(),
+        message,
+        details,
+        quote_id: None,
+        bank_code: None,
+        account_number: None,
+        provided_name: None,
+        actual_name: None,
+    };
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+        Json(ErrorResponse { error: detail }),
+    )
+        .into_response()
+}
 
 /// Handle offramp-specific errors
 fn handle_offramp_error(error: AppError) -> Response {

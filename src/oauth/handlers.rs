@@ -839,16 +839,29 @@ fn generate_client_secret() -> String {
     format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
-/// Hash a client secret with SHA-256.
+/// Hash a client secret with Argon2id (client secrets are long random
+/// strings, so a memory-hard KDF is used instead of bcrypt/SHA-256).
 fn hash_secret(secret: &str) -> String {
-    let hash = Sha256::digest(secret.as_bytes());
-    hex::encode(hash)
+    use argon2::password_hash::{PasswordHasher, SaltString};
+    use argon2::Argon2;
+    let salt = SaltString::generate(&mut rand::thread_rng());
+    Argon2::default()
+        .hash_password(secret.as_bytes(), &salt)
+        .map(|h| h.to_string())
+        .unwrap_or_default()
 }
 
-/// Verify a client secret against its stored hash.
+/// Verify a client secret against its stored Argon2id hash.
 fn verify_client_secret(secret: &str, stored_hash: Option<&str>) -> bool {
+    use argon2::password_hash::{PasswordHash, PasswordVerifier};
+    use argon2::Argon2;
     match stored_hash {
-        Some(hash) => hash_secret(secret) == hash,
+        Some(hash) => match PasswordHash::new(hash) {
+            Ok(parsed) => Argon2::default()
+                .verify_password(secret.as_bytes(), &parsed)
+                .is_ok(),
+            Err(_) => false,
+        },
         None => false,
     }
 }
