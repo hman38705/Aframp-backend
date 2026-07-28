@@ -25,18 +25,29 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct BatchState {
     pub db: Arc<PgPool>,
-    /// Maximum items allowed per cNGN transfer batch (from batch_config table)
+    /// Maximum items allowed per cNGN transfer batch (from AppConfig, env MAX_CNGN_BATCH_SIZE)
     pub max_cngn_batch_size: usize,
-    /// Maximum items allowed per fiat payout batch
+    /// Maximum items allowed per fiat payout batch (from AppConfig, env MAX_FIAT_BATCH_SIZE)
     pub max_fiat_batch_size: usize,
 }
 
 impl BatchState {
+    /// Create a `BatchState` with default limits (100 / 500).
+    /// Prefer `BatchState::from_config` in production to use AppConfig values.
     pub fn new(db: Arc<PgPool>) -> Self {
         Self {
             db,
             max_cngn_batch_size: 100,
             max_fiat_batch_size: 500,
+        }
+    }
+
+    /// Create a `BatchState` with limits sourced from `AppConfig.batch` (Issue #754).
+    pub fn from_config(db: Arc<PgPool>, config: &crate::config::BatchConfig) -> Self {
+        Self {
+            db,
+            max_cngn_batch_size: config.max_cngn_batch_size,
+            max_fiat_batch_size: config.max_fiat_batch_size,
         }
     }
 }
@@ -104,6 +115,7 @@ pub struct BatchStatusResponse {
     pub completed_at: Option<DateTime<Utc>>,
 }
 
+/// Structured error response body.
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
     pub error: ErrorDetail,
@@ -113,6 +125,10 @@ pub struct ErrorResponse {
 pub struct ErrorDetail {
     pub code: String,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub received: Option<usize>,
 }
 
 fn error_response(status: StatusCode, code: &str, message: &str) -> Response {
@@ -122,6 +138,26 @@ fn error_response(status: StatusCode, code: &str, message: &str) -> Response {
             error: ErrorDetail {
                 code: code.to_string(),
                 message: message.to_string(),
+                max: None,
+                received: None,
+            },
+        }),
+    )
+        .into_response()
+}
+
+fn batch_too_large_response(max: usize, received: usize) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ErrorResponse {
+            error: ErrorDetail {
+                code: "BATCH_TOO_LARGE".to_string(),
+                message: format!(
+                    "Batch size {} exceeds the maximum of {} items",
+                    received, max
+                ),
+                max: Some(max),
+                received: Some(received),
             },
         }),
     )
@@ -170,14 +206,7 @@ pub async fn create_cngn_transfer_batch(
     }
 
     if body.transfers.len() > state.max_cngn_batch_size {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "BATCH_TOO_LARGE",
-            &format!(
-                "Batch exceeds maximum size of {} items",
-                state.max_cngn_batch_size
-            ),
-        );
+        return batch_too_large_response(state.max_cngn_batch_size, body.transfers.len());
     }
 
     if !is_valid_stellar_address(&body.source_wallet) {
@@ -317,14 +346,7 @@ pub async fn create_fiat_payout_batch(
     }
 
     if body.payouts.len() > state.max_fiat_batch_size {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "BATCH_TOO_LARGE",
-            &format!(
-                "Batch exceeds maximum size of {} items",
-                state.max_fiat_batch_size
-            ),
-        );
+        return batch_too_large_response(state.max_fiat_batch_size, body.payouts.len());
     }
 
     // Validate all items

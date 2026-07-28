@@ -449,7 +449,8 @@ async fn main() -> anyhow::Result<()> {
     let warming_state = WarmingState::new();
     let health_checker =
         HealthChecker::new(db_pool.clone(), redis_cache.clone(), stellar_client.clone())
-            .with_warming_state(warming_state.clone());
+            .with_warming_state(warming_state.clone())
+            .with_replication_lag_threshold(app_config.database.replication_lag_health_threshold_secs);
 
     // Spawn background task to update DB pool connection gauge every 15 seconds
     if let Some(pool) = db_pool.clone() {

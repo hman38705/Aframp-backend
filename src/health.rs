@@ -123,6 +123,16 @@ pub struct HealthChecker {
     pub warming_state: Option<WarmingState>,
     /// Optional replication monitor for circuit-breaker-aware lag checks.
     pub replication_monitor: Option<crate::database::replication_monitor::ReplicationMonitor>,
+    /// Replication lag threshold for the `/health/edge` DNS-failover check (Issue #756).
+    ///
+    /// Distinct from the circuit-breaker threshold in `replication_monitor.rs`
+    /// (`DEFAULT_THRESHOLD_MS = 100`):
+    ///   - This threshold (default 5 s): coarse, drives Route 53 DNS failover.
+    ///   - Circuit-breaker threshold (100 ms): fine-grained, prevents stale reads per-request.
+    ///
+    /// Loaded from `AppConfig.database.replication_lag_health_threshold_secs`
+    /// (env: `REPLICATION_LAG_HEALTH_THRESHOLD_SECS`, default: 5).
+    pub replication_lag_health_threshold_secs: i64,
 }
 
 impl HealthChecker {
@@ -137,6 +147,7 @@ impl HealthChecker {
             stellar_client,
             warming_state: None,
             replication_monitor: None,
+            replication_lag_health_threshold_secs: REPLICATION_LAG_THRESHOLD_SECS,
         }
     }
 
@@ -153,6 +164,13 @@ impl HealthChecker {
         monitor: crate::database::replication_monitor::ReplicationMonitor,
     ) -> Self {
         self.replication_monitor = Some(monitor);
+        self
+    }
+
+    /// Override the replication lag health-check threshold (Issue #756).
+    /// Use this to wire in `AppConfig.database.replication_lag_health_threshold_secs`.
+    pub fn with_replication_lag_threshold(mut self, threshold_secs: i64) -> Self {
+        self.replication_lag_health_threshold_secs = threshold_secs;
         self
     }
 
@@ -422,8 +440,15 @@ mod tests {
 // Edge / replica health (Issue #348)
 // ---------------------------------------------------------------------------
 
-/// Maximum tolerated replication lag before the health endpoint returns 503.
-/// DNS failover is triggered when this threshold is breached.
+/// Default replication lag threshold for the `/health/edge` DNS-failover check.
+///
+/// This is the fallback value used when `HealthChecker` is constructed without
+/// calling `with_replication_lag_threshold()`. In production, wire in
+/// `AppConfig.database.replication_lag_health_threshold_secs` instead.
+///
+/// **Distinct from `DEFAULT_THRESHOLD_MS`** in `replication_monitor.rs` (100 ms):
+///   - This value (5 s): drives Route 53 DNS failover via `/health/edge`.
+///   - Circuit-breaker (100 ms): prevents stale reads on a per-request basis.
 pub const REPLICATION_LAG_THRESHOLD_SECS: i64 = 5;
 
 /// Check replication lag on the read replica.
@@ -449,8 +474,10 @@ pub async fn check_replication_lag(
 /// Axum handler: `GET /health/edge`
 ///
 /// Returns 200 when the gateway is healthy and replication lag is within
-/// threshold.  Returns 503 when lag exceeds `REPLICATION_LAG_THRESHOLD_SECS`,
-/// signalling the DNS load balancer to fail over to the next closest region.
+/// threshold.  Returns 503 when lag exceeds the configured
+/// `replication_lag_health_threshold_secs` (default 5 s, env
+/// `REPLICATION_LAG_HEALTH_THRESHOLD_SECS`), signalling the DNS load balancer
+/// to fail over to the next closest region.
 pub async fn edge_health_handler(
     axum::extract::State(checker): axum::extract::State<std::sync::Arc<HealthChecker>>,
 ) -> impl axum::response::IntoResponse {
@@ -458,6 +485,7 @@ pub async fn edge_health_handler(
     use serde_json::json;
 
     let region = crate::gateway::region::current_region();
+    let lag_threshold = checker.replication_lag_health_threshold_secs;
 
     // Run the standard health check first.
     let status = checker.check_health().await;
@@ -483,7 +511,7 @@ pub async fn edge_health_handler(
             breaker_open,
         );
 
-        if lag_secs > REPLICATION_LAG_THRESHOLD_SECS || breaker_open {
+        if lag_secs > lag_threshold || breaker_open {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
                 axum::Json(json!({
@@ -491,7 +519,7 @@ pub async fn edge_health_handler(
                     "region": region,
                     "reason": "replication_lag",
                     "lag_secs": lag_secs,
-                    "threshold_secs": REPLICATION_LAG_THRESHOLD_SECS,
+                    "threshold_secs": lag_threshold,
                     "circuit_breaker_open": breaker_open
                 })),
             );
@@ -511,7 +539,7 @@ pub async fn edge_health_handler(
     // Fallback: direct pg_stat_replication query.
     if let Some(pool) = &checker.db_pool {
         match check_replication_lag(pool).await {
-            Ok(Some(lag)) if lag > REPLICATION_LAG_THRESHOLD_SECS => {
+            Ok(Some(lag)) if lag > lag_threshold => {
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
                     axum::Json(json!({
@@ -519,7 +547,7 @@ pub async fn edge_health_handler(
                         "region": region,
                         "reason": "replication_lag",
                         "lag_secs": lag,
-                        "threshold_secs": REPLICATION_LAG_THRESHOLD_SECS
+                        "threshold_secs": lag_threshold
                     })),
                 );
             }

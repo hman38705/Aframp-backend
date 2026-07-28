@@ -62,6 +62,21 @@ pub struct ListSchedulesQuery {
     pub wallet_address: String,
     pub status: Option<String>,
     pub transaction_type: Option<String>,
+    /// Maximum records to return (max 100, default 20).
+    pub limit: Option<i64>,
+    /// Opaque base64 cursor from a previous response's `next_cursor` field.
+    pub cursor: Option<String>,
+}
+
+/// Pagination envelope returned by list endpoints.
+#[derive(Debug, Serialize)]
+pub struct PagedResponse<T> {
+    pub data: Vec<T>,
+    /// Opaque cursor to pass as `cursor=` to fetch the next page.
+    /// `null` when there are no more results.
+    pub next_cursor: Option<String>,
+    /// Whether more results exist beyond this page.
+    pub has_more: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -250,11 +265,16 @@ pub async fn create_schedule(
     }
 }
 
-/// GET /api/recurring?wallet_address=...&status=...&transaction_type=...
+/// GET /api/recurring?wallet_address=...&status=...&transaction_type=...&limit=...&cursor=...
 pub async fn list_schedules(
     State(state): State<Arc<RecurringState>>,
     Query(query): Query<ListSchedulesQuery>,
 ) -> impl IntoResponse {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+
+    const DEFAULT_LIMIT: i64 = 20;
+    const MAX_LIMIT: i64 = 100;
+
     if query.wallet_address.is_empty() {
         return err(
             StatusCode::BAD_REQUEST,
@@ -263,6 +283,17 @@ pub async fn list_schedules(
         )
         .into_response();
     }
+
+    let limit = query.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT).max(1);
+
+    // Decode opaque cursor — it encodes the last-seen schedule id as a UUID string.
+    let after_id: Option<Uuid> = query.cursor.as_deref().and_then(|c| {
+        URL_SAFE_NO_PAD
+            .decode(c)
+            .ok()
+            .and_then(|b| String::from_utf8(b).ok())
+            .and_then(|s| Uuid::parse_str(&s).ok())
+    });
 
     match state
         .repo
@@ -274,8 +305,43 @@ pub async fn list_schedules(
         .await
     {
         Ok(schedules) => {
-            let resp: Vec<ScheduleResponse> = schedules.into_iter().map(map_schedule).collect();
-            Json(resp).into_response()
+            // Apply cursor-based filtering: skip records until we're past `after_id`.
+            let filtered: Vec<_> = if let Some(aid) = after_id {
+                let mut past = false;
+                schedules
+                    .into_iter()
+                    .filter(|s| {
+                        if past {
+                            true
+                        } else if s.id == aid {
+                            past = true;
+                            false
+                        } else {
+                            false
+                        }
+                    })
+                    .collect()
+            } else {
+                schedules
+            };
+
+            // Take limit + 1 to detect whether there are more pages.
+            let mut page: Vec<_> = filtered.into_iter().take((limit + 1) as usize).collect();
+            let has_more = page.len() > limit as usize;
+            if has_more {
+                page.pop();
+            }
+
+            let next_cursor = if has_more {
+                page.last().map(|s| {
+                    URL_SAFE_NO_PAD.encode(s.id.to_string())
+                })
+            } else {
+                None
+            };
+
+            let data: Vec<ScheduleResponse> = page.into_iter().map(map_schedule).collect();
+            Json(PagedResponse { data, next_cursor, has_more }).into_response()
         }
         Err(e) => {
             error!(error = %e, "Failed to list recurring schedules");
