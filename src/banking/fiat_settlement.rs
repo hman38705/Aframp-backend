@@ -2,8 +2,8 @@
 //! Automatically mints or transfers equivalent cNGN upon verified bank deposit
 
 use crate::banking::integrations::{FiatSettlement, SettlementStatus};
-// REMOVED: use crate::chains::ChainService;
 use crate::wallet::WalletService;
+use chrono::Utc;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -54,19 +54,13 @@ pub struct SettlementExecutionResult {
 pub struct FiatSettlementExecutor {
     config: FiatSettlementConfig,
     wallet_service: Arc<WalletService>,
-    chain_service: Option<Arc<ChainService>>,
 }
 
 impl FiatSettlementExecutor {
-    pub fn new(
-        config: FiatSettlementConfig,
-        wallet_service: Arc<WalletService>,
-        chain_service: Option<Arc<ChainService>>,
-    ) -> Self {
+    pub fn new(config: FiatSettlementConfig, wallet_service: Arc<WalletService>) -> Self {
         Self {
             config,
             wallet_service,
-            chain_service,
         }
     }
 
@@ -100,7 +94,7 @@ impl FiatSettlementExecutor {
         let transaction_hash = self.mint_cngn(&wallet_address, cngn_amount).await?;
 
         // 6. Update settlement record
-        settlement.cn gn_minted = true;
+        settlement.cngn_minted = true;
         settlement.settlement_status = SettlementStatus::Completed;
         settlement.completed_at = Some(Utc::now());
 

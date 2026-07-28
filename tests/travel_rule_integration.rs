@@ -11,7 +11,7 @@
 #[cfg(feature = "database")]
 mod travel_rule_integration {
     use aframp_backend::travel_rule::{
-        models::*, repository::TravelRuleRepository,
+        models::*, repository::TravelRuleRepository, service::TravelRuleService,
     };
     use rust_decimal::Decimal;
     use sqlx::PgPool;
@@ -456,4 +456,71 @@ mod travel_rule_integration {
         assert_eq!(decrypted, data);
         Ok(())
     }
+
+    // -------------------------------------------------------------------------
+    // 13. Enforcement gate — transfers with incomplete originator/beneficiary
+    //     data are rejected before the transaction can proceed (Issue: Travel
+    //     Rule enforcement on transfers above threshold). Pure (no DB).
+    // -------------------------------------------------------------------------
+
+    fn complete_natural(account_number: Option<&str>) -> Ivms101Person {
+        Ivms101Person::Natural(Ivms101NaturalPerson {
+            first_name: "Amaka".into(),
+            last_name: "Okafor".into(),
+            date_of_birth: None,
+            national_id: None,
+            address: None,
+            country_of_residence: Some("NG".into()),
+            account_number: account_number.map(String::from),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_enforcement_blocks_missing_account_number() {
+        let person = complete_natural(None);
+        let result = TravelRuleService::validate_minimum_fields(&person);
+        assert!(
+            result.is_err(),
+            "a transfer must not be allowed to proceed without an account/wallet identifier"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_enforcement_blocks_missing_name() {
+        let person = Ivms101Person::Natural(Ivms101NaturalPerson {
+            first_name: "".into(),
+            last_name: "".into(),
+            date_of_birth: None,
+            national_id: None,
+            address: None,
+            country_of_residence: Some("NG".into()),
+            account_number: Some("GAJHF7SVXMVDSKJF".into()),
+        });
+        let result = TravelRuleService::validate_minimum_fields(&person);
+        assert!(
+            result.is_err(),
+            "a transfer must not be allowed to proceed without originator/beneficiary identification"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_enforcement_allows_minimum_fields_present() {
+        let person = complete_natural(Some("GAJHF7SVXMVDSKJF"));
+        let result = TravelRuleService::validate_minimum_fields(&person);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_enforcement_blocks_legal_person_missing_name() {
+        let person = Ivms101Person::Legal(Ivms101LegalPerson {
+            legal_name: "".into(),
+            registration_number: None,
+            country_of_registration: None,
+            address: None,
+            account_number: Some("GBZXHF7SVXMVDSKJF".into()),
+        });
+        let result = TravelRuleService::validate_minimum_fields(&person);
+        assert!(result.is_err());
+    }
+
 }

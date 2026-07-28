@@ -80,6 +80,12 @@ pub struct StellarConfig {
     pub request_timeout: u64, // seconds
     pub max_retries: u32,
     pub health_check_interval: u64, // seconds
+    /// Max idle connections per host kept open by the Horizon reqwest client pool
+    pub horizon_max_connections: usize,
+    /// Per-request timeout for the underlying Horizon HTTP client (seconds)
+    pub horizon_request_timeout_secs: u64,
+    /// TCP keep-alive interval for pooled Horizon connections (seconds)
+    pub horizon_keep_alive_secs: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -414,6 +420,24 @@ impl StellarConfig {
                 .map_err(|_| {
                     ConfigError::InvalidValue("STELLAR_HEALTH_CHECK_INTERVAL".to_string())
                 })?,
+            horizon_max_connections: env::var("STELLAR_HORIZON_MAX_CONNECTIONS")
+                .unwrap_or_else(|_| "32".to_string())
+                .parse()
+                .map_err(|_| {
+                    ConfigError::InvalidValue("STELLAR_HORIZON_MAX_CONNECTIONS".to_string())
+                })?,
+            horizon_request_timeout_secs: env::var("STELLAR_HORIZON_REQUEST_TIMEOUT_SECS")
+                .unwrap_or_else(|_| "15".to_string())
+                .parse()
+                .map_err(|_| {
+                    ConfigError::InvalidValue("STELLAR_HORIZON_REQUEST_TIMEOUT_SECS".to_string())
+                })?,
+            horizon_keep_alive_secs: env::var("STELLAR_HORIZON_KEEP_ALIVE_SECS")
+                .unwrap_or_else(|_| "90".to_string())
+                .parse()
+                .map_err(|_| {
+                    ConfigError::InvalidValue("STELLAR_HORIZON_KEEP_ALIVE_SECS".to_string())
+                })?,
         })
     }
 
@@ -436,6 +460,18 @@ impl StellarConfig {
         if self.request_timeout == 0 {
             return Err(ConfigError::InvalidValue(
                 "STELLAR_REQUEST_TIMEOUT".to_string(),
+            ));
+        }
+
+        if self.horizon_max_connections == 0 {
+            return Err(ConfigError::InvalidValue(
+                "STELLAR_HORIZON_MAX_CONNECTIONS".to_string(),
+            ));
+        }
+
+        if self.horizon_request_timeout_secs == 0 {
+            return Err(ConfigError::InvalidValue(
+                "STELLAR_HORIZON_REQUEST_TIMEOUT_SECS".to_string(),
             ));
         }
 

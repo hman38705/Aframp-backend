@@ -8,7 +8,35 @@ use chrono::Utc;
 use sqlx::PgPool;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::Semaphore;
 use uuid::Uuid;
+
+/// Default number of callers allowed to wait concurrently for a channel slot
+/// once every channel is at its in-flight cap.
+pub const DEFAULT_QUEUE_DEPTH: usize = 500;
+/// Default time a caller will wait in the queue before giving up.
+pub const DEFAULT_QUEUE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Backoff between retries while waiting for a channel to free up.
+const QUEUE_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+/// RAII guard: increments `aframp_stellar_queue_depth` on creation, decrements
+/// it on drop — covers every exit path (success, error, or the caller
+/// dropping the future early).
+struct QueueDepthGuard;
+
+impl QueueDepthGuard {
+    fn new() -> Self {
+        crate::metrics::stellar::queue_depth().inc();
+        Self
+    }
+}
+
+impl Drop for QueueDepthGuard {
+    fn drop(&mut self) {
+        crate::metrics::stellar::queue_depth().dec();
+    }
+}
 
 /// Pool of submission channels with load balancing and circuit breaking
 pub struct ChannelPool {
@@ -18,15 +46,42 @@ pub struct ChannelPool {
     current_index: Arc<std::sync::atomic::AtomicUsize>,
     circuit_breaker_threshold: u32,
     max_in_flight_per_channel: u32,
+    /// Bounds how many callers may wait concurrently for a channel slot —
+    /// the backpressure queue's "depth".
+    queue: Arc<Semaphore>,
+    queue_timeout: Duration,
 }
 
 impl ChannelPool {
-    /// Create a new channel pool for an issuer
+    /// Create a new channel pool for an issuer, using the default queue depth
+    /// (500) and queue timeout (10s). Use [`ChannelPool::with_queue_config`]
+    /// to configure these explicitly.
     pub async fn new(
         pool: PgPool,
         issuer_id: Uuid,
         circuit_breaker_threshold: u32,
         max_in_flight_per_channel: u32,
+    ) -> SubmissionResult<Self> {
+        Self::with_queue_config(
+            pool,
+            issuer_id,
+            circuit_breaker_threshold,
+            max_in_flight_per_channel,
+            DEFAULT_QUEUE_DEPTH,
+            DEFAULT_QUEUE_TIMEOUT,
+        )
+        .await
+    }
+
+    /// Create a new channel pool with an explicit backpressure queue depth
+    /// and timeout.
+    pub async fn with_queue_config(
+        pool: PgPool,
+        issuer_id: Uuid,
+        circuit_breaker_threshold: u32,
+        max_in_flight_per_channel: u32,
+        queue_depth: usize,
+        queue_timeout: Duration,
     ) -> SubmissionResult<Self> {
         let channels = Arc::new(tokio::sync::RwLock::new(Vec::new()));
         let pool_obj = Self {
@@ -36,6 +91,8 @@ impl ChannelPool {
             current_index: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             circuit_breaker_threshold,
             max_in_flight_per_channel,
+            queue: Arc::new(Semaphore::new(queue_depth)),
+            queue_timeout,
         };
 
         pool_obj.reload_from_database().await?;
@@ -163,6 +220,56 @@ impl ChannelPool {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
         Ok((channel, reserved))
+    }
+
+    /// Reserve a sequence number, applying bounded backpressure: when every
+    /// channel is at its in-flight cap, wait for one to free up (retrying
+    /// with a short backoff) instead of failing the caller immediately.
+    ///
+    /// The pool's `queue` semaphore bounds how many callers may be waiting
+    /// concurrently to `queue_depth` — once that's full, callers fail fast
+    /// with [`SubmissionError::QueueTimeout`] rather than piling up
+    /// unboundedly. A caller that does get a queue slot still gives up and
+    /// returns [`SubmissionError::QueueTimeout`] if no channel frees up
+    /// within `queue_timeout`.
+    ///
+    /// [`SubmissionError::NoActiveChannels`] (no channels registered, or
+    /// every circuit breaker open) is not retried — waiting cannot help.
+    pub async fn reserve_sequence_with_backpressure(&self) -> SubmissionResult<(ChannelHandle, i64)> {
+        let start = Instant::now();
+
+        let _permit = match timeout(self.queue_timeout, self.queue.acquire()).await {
+            Ok(Ok(permit)) => permit,
+            _ => {
+                crate::metrics::stellar::queue_timeout_total()
+                    .with_label_values(&[])
+                    .inc();
+                return Err(SubmissionError::QueueTimeout {
+                    waited_ms: start.elapsed().as_millis() as u64,
+                    timeout_ms: self.queue_timeout.as_millis() as u64,
+                });
+            }
+        };
+        let _depth_guard = QueueDepthGuard::new();
+
+        loop {
+            match self.reserve_sequence().await {
+                Ok(result) => return Ok(result),
+                Err(SubmissionError::ChannelExhausted(_)) => {
+                    if start.elapsed() >= self.queue_timeout {
+                        crate::metrics::stellar::queue_timeout_total()
+                            .with_label_values(&[])
+                            .inc();
+                        return Err(SubmissionError::QueueTimeout {
+                            waited_ms: start.elapsed().as_millis() as u64,
+                            timeout_ms: self.queue_timeout.as_millis() as u64,
+                        });
+                    }
+                    tokio::time::sleep(QUEUE_POLL_INTERVAL).await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     /// Rotate to next channel (used after errors)

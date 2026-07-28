@@ -3,7 +3,7 @@
 //! Handles checking, creating, and verifying trustlines for the cNGN stablecoin.
 //! A trustline is required for Stellar accounts to hold custom assets like cNGN.
 
-// REMOVED: use crate::chains::stellar::{
+use crate::chains::stellar::{
     client::StellarClient,
     errors::StellarError,
     types::{AssetBalance, StellarAccountInfo},

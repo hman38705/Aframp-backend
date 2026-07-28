@@ -6,9 +6,29 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
-// Re-export compliance registry status types
+// Corridor status
+//
+// Originally defined in the `compliance_registry` module, which was removed
+// (see dd3c49f) and hasn't been restored. Defined locally here since it's a
+// DB-backed enum (`corridor_status`) actively used by corridor routing
+// queries, not something that can simply be dropped.
 // ---------------------------------------------------------------------------
-pub use crate::compliance_registry::models::CorridorStatus;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "corridor_status", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum CorridorStatus {
+    Active,
+    Suspended,
+    BlockedLicenseExpired,
+    BlockedLicenseSuspended,
+    BlockedRegulatory,
+}
+
+impl CorridorStatus {
+    pub fn is_open(&self) -> bool {
+        matches!(self, CorridorStatus::Active)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Core corridor config
