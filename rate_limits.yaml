@@ -11,6 +11,15 @@
 #   tier: <CRITICAL|FINANCIAL|STANDARD|PUBLIC>   # optional — used as the
 #     per_ip fallback whenever per_ip is not set explicitly above (Issue #726)
 
+# Per-consumer overrides (Issue #175 / #725): authenticated API-key callers
+# with a `consumer_rate_limit_profiles` row (by consumer_type) or an active
+# `consumer_rate_limit_overrides` row are checked against that DB-backed
+# profile *in addition to* the static limits below, across the "global",
+# "endpoint_critical" / "endpoint_elevated" / "endpoint_standard", "tx_*",
+# and "ip" dimensions. See src/middleware/rate_limit.rs and
+# src/api/admin/rate_limits.rs (admin CRUD for overrides). This file remains
+# the source of truth for unauthenticated / non-API-key traffic.
+
 # Endpoint sensitivity tiers — coarse-grained default limits applied by
 # `tier:` when an endpoint doesn't define its own per_ip limit. Values are
 # requests per window (see acceptance criteria in Issue #726).

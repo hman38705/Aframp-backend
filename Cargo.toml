@@ -281,6 +281,11 @@ path = "tests/rate_limit_tier_test.rs"
 required-features = ["cache"]
 
 [[test]]
+name = "advanced_rate_limit_test"
+path = "tests/advanced_rate_limit_test.rs"
+required-features = ["database"]
+
+[[test]]
 name = "request_integrity_test"
 path = "tests/request_integrity_test.rs"
 required-features = ["database"]

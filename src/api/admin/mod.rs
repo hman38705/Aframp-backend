@@ -4,6 +4,7 @@ pub mod dashboard;
 pub mod ip_reputation;
 pub mod keys;
 pub mod partner;
+pub mod rate_limits;
 pub mod reconciliation;
 pub mod revocation;
 pub mod scopes;

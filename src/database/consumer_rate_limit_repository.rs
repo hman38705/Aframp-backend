@@ -44,7 +44,7 @@ pub type LimitsJson = serde_json::Value; // Flexible JSONB
 #[derive(Debug, Clone, FromRow)]
 pub struct Profile {
     pub consumer_type: String,
-    pub limits_json: PgJson<LimitsJson>,
+    pub limits_json: LimitsJson,
     pub burst_multiplier: f64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -54,7 +54,7 @@ pub struct Profile {
 pub struct Override {
     pub id: Uuid,
     pub consumer_id: Uuid,
-    pub limits_json: PgJson<LimitsJson>,
+    pub limits_json: LimitsJson,
     pub expiry_at: Option<DateTime<Utc>>,
     pub created_by: Option<Uuid>,
     pub reason: Option<String>,
@@ -86,7 +86,7 @@ impl ConsumerRateLimitRepository {
             RETURNING *
             "#,
             consumer_type,
-            limits_json as PgJson<LimitsJson>,
+            limits_json,
             burst_multiplier
         )
         .fetch_one(self.pool.as_ref())
@@ -125,7 +125,7 @@ impl ConsumerRateLimitRepository {
             RETURNING *
             "#,
             consumer_id,
-            limits_json as PgJson<LimitsJson>,
+            limits_json,
             expiry_at,
             created_by,
             reason

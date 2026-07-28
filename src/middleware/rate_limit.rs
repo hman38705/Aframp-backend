@@ -130,6 +130,107 @@ impl RateLimitConfig {
 pub struct RateLimitState {
     pub cache: Arc<RedisCache>,
     pub config: Arc<RateLimitConfig>,
+    /// Enables per-consumer multi-dimension rate limiting (global/endpoint/
+    /// tx-type/IP, merged from `consumer_rate_limit_profiles` +
+    /// `consumer_rate_limit_overrides`) when a DB pool is configured.
+    /// `None` skips this layer and falls back to the wallet/IP tier limits
+    /// from `rate_limits.yaml` (Issue #175 / #725).
+    pub consumer_repo:
+        Option<Arc<crate::database::consumer_rate_limit_repository::ConsumerRateLimitRepository>>,
+    pub db_pool: Option<Arc<sqlx::PgPool>>,
+}
+
+/// Extracts a raw API key from `Authorization: Bearer <key>` or
+/// `X-API-Key: <key>`. Mirrors `middleware::api_key::extract_raw_key`
+/// (kept private there) — duplicated rather than exposed cross-module since
+/// rate limiting only needs to *identify* the consumer, not authenticate.
+fn extract_raw_api_key(headers: &axum::http::HeaderMap) -> Option<String> {
+    if let Some(bearer) = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+    {
+        return Some(bearer.to_string());
+    }
+    headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+}
+
+/// Maps an endpoint sensitivity tier (Issue #726) to the matching key in a
+/// consumer's `limits_json` (see `consumer_rate_limit_profiles.limits_json`
+/// seed data in the #175 migration).
+fn endpoint_dimension(tier: Option<EndpointTier>) -> Option<&'static str> {
+    match tier {
+        Some(EndpointTier::Critical) => Some("endpoint_critical"),
+        Some(EndpointTier::Financial) => Some("endpoint_elevated"),
+        Some(EndpointTier::Standard) => Some("endpoint_standard"),
+        Some(EndpointTier::Public) | None => None,
+    }
+}
+
+/// Maps a request path to a transaction-type dimension, when applicable.
+fn tx_type_dimension(path: &str) -> Option<&'static str> {
+    if path.starts_with("/api/onramp") {
+        Some("tx_onramp")
+    } else if path.starts_with("/api/offramp") {
+        Some("tx_offramp")
+    } else if path.starts_with("/api/mint") {
+        Some("tx_mint")
+    } else if path.starts_with("/api/redemption") {
+        Some("tx_redemption")
+    } else {
+        None
+    }
+}
+
+/// Reads a `{limit, window_secs}` dimension out of a consumer's merged
+/// `limits_json`. Returns `None` if the dimension isn't configured for that
+/// consumer type/override, in which case it's simply not checked.
+fn dimension_limit(json: &serde_json::Value, key: &str) -> Option<LimitConfig> {
+    let dim = json.get(key)?;
+    Some(LimitConfig {
+        limit: dim.get("limit")?.as_i64()?,
+        window: dim.get("window_secs")?.as_i64()?,
+    })
+}
+
+/// Outcome of a single dimension check against the atomic sliding-window
+/// script.
+enum DimensionOutcome {
+    Allowed { count: i64 },
+    Denied { count: i64 },
+    RedisUnavailable,
+}
+
+async fn check_dimension(
+    conn: &mut bb8::PooledConnection<'_, bb8_redis::RedisConnectionManager>,
+    redis_key: &str,
+    limit_conf: &LimitConfig,
+    req_id: &str,
+    now_ms: i64,
+) -> DimensionOutcome {
+    match SLIDING_WINDOW_SCRIPT
+        .key(redis_key)
+        .arg(now_ms)
+        .arg(limit_conf.window * 1000)
+        .arg(limit_conf.limit)
+        .arg(req_id)
+        .arg(limit_conf.window)
+        .invoke_async::<(i64, i64)>(&mut **conn)
+        .await
+    {
+        Ok((1, count)) => DimensionOutcome::Allowed { count },
+        Ok((_, count)) => DimensionOutcome::Denied { count },
+        Err(e) => {
+            warn!(
+                "Redis Lua script failed checking dimension {}, failing open: {}",
+                redis_key, e
+            );
+            DimensionOutcome::RedisUnavailable
+        }
+    }
 }
 
 pub async fn rate_limit_middleware(
@@ -190,6 +291,184 @@ pub async fn rate_limit_middleware(
         .and_then(|h| h.to_str().ok())
         .map(|s| s.split(',').next().unwrap_or("").trim().to_string())
         .unwrap_or_else(|| addr.ip().to_string());
+
+    // 2b. Per-consumer multi-dimension rate limiting (Issue #175 / #725).
+    // When the caller authenticates with an API key that has a rate-limit
+    // profile or admin override, that profile is authoritative for this
+    // request and checked across all configured dimensions (global,
+    // endpoint sensitivity, transaction type, IP) — the most restrictive
+    // dimension wins. Falls through to the wallet/IP tier check below when
+    // no DB pool is wired, no API key is present, or the consumer has no
+    // profile configured.
+    if let (Some(pool), Some(repo)) = (state.db_pool.as_ref(), state.consumer_repo.as_ref()) {
+        if let Some(raw_key) = extract_raw_api_key(req.headers()) {
+            if let Some(auth) = crate::middleware::api_key::resolve_api_key(pool, &raw_key).await
+            {
+                if let Ok(Some(limits_json)) = repo.get_effective_limits(auth.consumer_id).await {
+                    let mut dims: Vec<(String, LimitConfig)> = Vec::new();
+                    if let Some(lc) = dimension_limit(&limits_json, "global") {
+                        dims.push(("global".to_string(), lc));
+                    }
+                    if let Some(ep) = endpoint_dimension(limits.tier) {
+                        if let Some(lc) = dimension_limit(&limits_json, ep) {
+                            dims.push((ep.to_string(), lc));
+                        }
+                    }
+                    if let Some(tx) = tx_type_dimension(&path) {
+                        if let Some(lc) = dimension_limit(&limits_json, tx) {
+                            dims.push((tx.to_string(), lc));
+                        }
+                    }
+                    if let Some(lc) = dimension_limit(&limits_json, "ip") {
+                        dims.push(("ip".to_string(), lc));
+                    }
+
+                    if !dims.is_empty() {
+                        let mut conn = match state.cache.get_connection().await {
+                            Ok(c) => c,
+                            Err(e) => {
+                                warn!(
+                                    "Redis connection unavailable for consumer rate limiting, failing open: {}",
+                                    e
+                                );
+                                crate::middleware::rate_limit_metrics::record_redis_fallback(
+                                    "connection_error",
+                                );
+                                return Ok(next.run(req).await);
+                            }
+                        };
+
+                        let now_ms = Utc::now().timestamp_millis();
+                        let req_id = Uuid::new_v4().to_string();
+                        let sensitivity = limits.tier.map(|t| t.as_str()).unwrap_or("STANDARD");
+                        // Headers report the most restrictive (smallest limit) dimension checked.
+                        let mut reporting: Option<(i64, i64, i64)> = None;
+
+                        for (dim_name, dim_limit) in &dims {
+                            // The "ip" dimension is metered per source IP, but the
+                            // *metric label* stays the fixed string "ip" — folding the
+                            // raw IP into a label would blow up Prometheus cardinality.
+                            let redis_key = if dim_name == "ip" {
+                                format!("rate_limit:consumer:{}:ip:{}", auth.consumer_id, ip)
+                            } else {
+                                format!("rate_limit:consumer:{}:{}", auth.consumer_id, dim_name)
+                            };
+                            crate::middleware::rate_limit_metrics::record_check(
+                                dim_name,
+                                &auth.consumer_type,
+                                sensitivity,
+                            );
+
+                            match check_dimension(&mut conn, &redis_key, dim_limit, &req_id, now_ms)
+                                .await
+                            {
+                                DimensionOutcome::RedisUnavailable => {
+                                    crate::middleware::rate_limit_metrics::record_redis_fallback(
+                                        "script_error",
+                                    );
+                                    return Ok(next.run(req).await);
+                                }
+                                DimensionOutcome::Denied { count } => {
+                                    crate::middleware::rate_limit_metrics::record_hit(
+                                        dim_name,
+                                        &auth.consumer_type,
+                                        sensitivity,
+                                    );
+                                    crate::middleware::rate_limit_metrics::record_429(
+                                        auth.consumer_id,
+                                        dim_name,
+                                    );
+                                    warn!(
+                                        consumer_id = %auth.consumer_id,
+                                        dimension = %dim_name,
+                                        count = count,
+                                        limit = dim_limit.limit,
+                                        "Consumer rate limit exceeded"
+                                    );
+
+                                    let reset_at = (now_ms / 1000) + dim_limit.window;
+                                    let response_body = json!({
+                                        "error": {
+                                            "code": "RATE_LIMIT_EXCEEDED",
+                                            "message": "Too many requests",
+                                            "dimension": dim_name,
+                                            "limit": dim_limit.limit,
+                                            "remaining": 0,
+                                            "retry_after": dim_limit.window,
+                                            "reset_at": chrono::DateTime::<Utc>::from_utc(
+                                                chrono::NaiveDateTime::from_timestamp_opt(reset_at, 0).unwrap_or_default(), Utc
+                                            ).to_rfc3339()
+                                        }
+                                    });
+                                    let mut res =
+                                        (StatusCode::TOO_MANY_REQUESTS, Json(response_body))
+                                            .into_response();
+                                    res.headers_mut().insert(
+                                        "X-RateLimit-Limit",
+                                        HeaderValue::from_str(&dim_limit.limit.to_string())
+                                            .unwrap(),
+                                    );
+                                    res.headers_mut().insert(
+                                        "X-RateLimit-Remaining",
+                                        HeaderValue::from_static("0"),
+                                    );
+                                    res.headers_mut().insert(
+                                        "X-RateLimit-Reset",
+                                        HeaderValue::from_str(&reset_at.to_string()).unwrap(),
+                                    );
+                                    res.headers_mut().insert(
+                                        "X-RateLimit-Used",
+                                        HeaderValue::from_str(&count.to_string()).unwrap(),
+                                    );
+                                    res.headers_mut().insert(
+                                        "Retry-After",
+                                        HeaderValue::from_str(&dim_limit.window.to_string())
+                                            .unwrap(),
+                                    );
+                                    return Err(res);
+                                }
+                                DimensionOutcome::Allowed { count } => {
+                                    let pct = (count as f64
+                                        / dim_limit.limit.max(1) as f64)
+                                        * 100.0;
+                                    crate::middleware::rate_limit_metrics::record_utilisation(
+                                        &auth.consumer_type,
+                                        dim_name,
+                                        pct,
+                                    );
+                                    let remaining = (dim_limit.limit - count).max(0);
+                                    let reset_at = (now_ms / 1000) + dim_limit.window;
+                                    let more_restrictive = reporting
+                                        .map(|(l, _, _)| dim_limit.limit < l)
+                                        .unwrap_or(true);
+                                    if more_restrictive {
+                                        reporting = Some((dim_limit.limit, remaining, reset_at));
+                                    }
+                                }
+                            }
+                        }
+
+                        let mut res = next.run(req).await.into_response();
+                        if let Some((limit, remaining, reset_at)) = reporting {
+                            res.headers_mut().insert(
+                                "X-RateLimit-Limit",
+                                HeaderValue::from_str(&limit.to_string()).unwrap(),
+                            );
+                            res.headers_mut().insert(
+                                "X-RateLimit-Remaining",
+                                HeaderValue::from_str(&remaining.to_string()).unwrap(),
+                            );
+                            res.headers_mut().insert(
+                                "X-RateLimit-Reset",
+                                HeaderValue::from_str(&reset_at.to_string()).unwrap(),
+                            );
+                        }
+                        return Ok(res);
+                    }
+                }
+            }
+        }
+    }
 
     let (redis_key, limit_conf) = if let Some(ref w) = wallet_address {
         if let Some(wl) = limits.per_wallet {
