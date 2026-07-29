@@ -38,6 +38,7 @@ pub mod request_integrity;
 pub mod scope_middleware;
 
 pub mod cors;
+pub mod csrf;
 pub mod security;
 #[cfg(feature = "database")]
 pub mod auth_rate_limit;

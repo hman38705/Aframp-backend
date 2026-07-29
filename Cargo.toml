@@ -342,6 +342,11 @@ name = "replay_prevention_providers_test"
 path = "tests/replay_prevention_providers_test.rs"
 required-features = ["cache"]
 
+[[test]]
+name = "cors_security_test"
+path = "tests/cors_security_test.rs"
+required-features = ["database"]
+
 # ---------------------------------------------------------------------------
 # Examples
 # ---------------------------------------------------------------------------

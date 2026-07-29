@@ -1,6 +1,17 @@
 //! CTR Prometheus Metrics
 //!
 //! Provides Prometheus counters and gauges for CTR lifecycle metrics and deadlines.
+//!
+//! # Metric Registration Pattern
+//!
+//! All metrics are registered once at program startup via `lazy_static!`. The
+//! `register_*` macros return `Err` only when a metric with the same name has
+//! already been registered — which is a **programming error**, not a runtime
+//! condition. Panicking immediately (via `.expect(...)`) is the correct behaviour:
+//! it fails fast before the process starts serving traffic, making the duplicate
+//! registration obvious in logs and CI. Do **not** silence these panics or convert
+//! them to `unwrap_or` — a silently-skipped duplicate registration would leave a
+//! metric silently unregistered.
 
 use lazy_static::lazy_static;
 use prometheus::{
@@ -15,7 +26,7 @@ lazy_static! {
         "Total number of CTRs generated",
         &["ctr_type", "detection_method"]
     )
-    .unwrap();
+    .expect("Prometheus metric registration failed — duplicate metric name is a programming error");
 
     /// Counter for CTRs filed
     pub static ref CTR_FILED_TOTAL: CounterVec = register_counter_vec!(
@@ -23,7 +34,7 @@ lazy_static! {
         "Total number of CTRs filed",
         &["ctr_type", "filing_method"]
     )
-    .unwrap();
+    .expect("Prometheus metric registration failed — duplicate metric name is a programming error");
 
     /// Counter for CTR status changes
     pub static ref CTR_STATUS_CHANGE_TOTAL: CounterVec = register_counter_vec!(
@@ -31,7 +42,7 @@ lazy_static! {
         "Total number of CTR status changes",
         &["from_status", "to_status"]
     )
-    .unwrap();
+    .expect("Prometheus metric registration failed — duplicate metric name is a programming error");
 
     /// Counter for threshold breaches
     pub static ref CTR_THRESHOLD_BREACH_TOTAL: CounterVec = register_counter_vec!(
@@ -39,7 +50,7 @@ lazy_static! {
         "Total number of threshold breaches",
         &["subject_type"]
     )
-    .unwrap();
+    .expect("Prometheus metric registration failed — duplicate metric name is a programming error");
 
     /// Counter for exemptions applied
     pub static ref CTR_EXEMPTION_APPLIED_TOTAL: CounterVec = register_counter_vec!(
@@ -47,7 +58,7 @@ lazy_static! {
         "Total number of exemptions applied",
         &["exemption_category"]
     )
-    .unwrap();
+    .expect("Prometheus metric registration failed — duplicate metric name is a programming error");
 
     /// Counter for batch filing operations
     pub static ref CTR_BATCH_FILING_TOTAL: CounterVec = register_counter_vec!(
@@ -55,7 +66,7 @@ lazy_static! {
         "Total number of batch filing operations",
         &["status"]
     )
-    .unwrap();
+    .expect("Prometheus metric registration failed — duplicate metric name is a programming error");
 
     /// Counter for deadline reminders sent
     pub static ref CTR_DEADLINE_REMINDER_TOTAL: CounterVec = register_counter_vec!(
@@ -63,7 +74,7 @@ lazy_static! {
         "Total number of deadline reminders sent",
         &["reminder_type"]
     )
-    .unwrap();
+    .expect("Prometheus metric registration failed — duplicate metric name is a programming error");
 
     /// Counter for overdue alerts
     pub static ref CTR_OVERDUE_ALERT_TOTAL: CounterVec = register_counter_vec!(
@@ -71,7 +82,7 @@ lazy_static! {
         "Total number of overdue alerts sent",
         &["alert_type"]
     )
-    .unwrap();
+    .expect("Prometheus metric registration failed — duplicate metric name is a programming error");
 
     /// Gauge for CTRs by status
     pub static ref CTR_BY_STATUS: GaugeVec = register_gauge_vec!(
@@ -79,7 +90,7 @@ lazy_static! {
         "Number of CTRs by status",
         &["status"]
     )
-    .unwrap();
+    .expect("Prometheus metric registration failed — duplicate metric name is a programming error");
 
     /// Gauge for CTRs by type
     pub static ref CTR_BY_TYPE: GaugeVec = register_gauge_vec!(
@@ -87,7 +98,7 @@ lazy_static! {
         "Number of CTRs by type",
         &["ctr_type"]
     )
-    .unwrap();
+    .expect("Prometheus metric registration failed — duplicate metric name is a programming error");
 
     /// Gauge for overdue CTRs
     pub static ref CTR_OVERDUE: GaugeVec = register_gauge_vec!(
@@ -95,7 +106,7 @@ lazy_static! {
         "Number of overdue CTRs",
         &["days_overdue_range"]
     )
-    .unwrap();
+    .expect("Prometheus metric registration failed — duplicate metric name is a programming error");
 
     /// Gauge for CTRs approaching deadline
     pub static ref CTR_APPROACHING_DEADLINE: GaugeVec = register_gauge_vec!(
@@ -103,7 +114,7 @@ lazy_static! {
         "Number of CTRs approaching deadline",
         &["days_until_deadline"]
     )
-    .unwrap();
+    .expect("Prometheus metric registration failed — duplicate metric name is a programming error");
 
     /// Gauge for total amount in pending CTRs
     pub static ref CTR_PENDING_AMOUNT_NGN: GaugeVec = register_gauge_vec!(
@@ -111,7 +122,7 @@ lazy_static! {
         "Total amount in NGN for pending CTRs",
         &["status"]
     )
-    .unwrap();
+    .expect("Prometheus metric registration failed — duplicate metric name is a programming error");
 
     /// Histogram for CTR processing time
     pub static ref CTR_PROCESSING_DURATION_SECONDS: HistogramVec = register_histogram_vec!(
@@ -120,7 +131,7 @@ lazy_static! {
         &["stage"],
         vec![1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0, 1800.0, 3600.0]
     )
-    .unwrap();
+    .expect("Prometheus metric registration failed — duplicate metric name is a programming error");
 
     /// Histogram for batch filing duration
     pub static ref CTR_BATCH_FILING_DURATION_SECONDS: HistogramVec = register_histogram_vec!(
@@ -129,7 +140,7 @@ lazy_static! {
         &["batch_size_range"],
         vec![1.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0]
     )
-    .unwrap();
+    .expect("Prometheus metric registration failed — duplicate metric name is a programming error");
 
     /// Histogram for filing retry count
     pub static ref CTR_FILING_RETRY_COUNT: HistogramVec = register_histogram_vec!(
@@ -138,7 +149,7 @@ lazy_static! {
         &["final_status"],
         vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
     )
-    .unwrap();
+    .expect("Prometheus metric registration failed — duplicate metric name is a programming error");
 }
 
 /// Record CTR generation
