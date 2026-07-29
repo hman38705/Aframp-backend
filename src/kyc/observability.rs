@@ -64,27 +64,29 @@ pub struct KycMetrics {
 }
 
 impl KycMetrics {
-    pub fn new() -> Self {
+    /// Create a new `KycMetrics` instance, registering all Prometheus metrics.
+    ///
+    /// Returns `Err(prometheus::Error)` if any metric construction or registration
+    /// fails (e.g. duplicate registration). Callers should propagate or log the
+    /// error rather than panicking.
+    pub fn new() -> Result<Self, prometheus::Error> {
         let registry = Arc::new(Registry::new());
 
         // Session metrics
         let sessions_initiated_total = Counter::new(
             "kyc_sessions_initiated_total",
             "Total number of KYC sessions initiated",
-        )
-        .unwrap();
+        )?;
 
         let sessions_completed_total = Counter::new(
             "kyc_sessions_completed_total",
             "Total number of KYC sessions completed",
-        )
-        .unwrap();
+        )?;
 
         let sessions_expired_total = Counter::new(
             "kyc_sessions_expired_total",
             "Total number of KYC sessions expired",
-        )
-        .unwrap();
+        )?;
 
         let session_duration_seconds = Histogram::with_opts(
             prometheus::HistogramOpts::new(
@@ -92,33 +94,28 @@ impl KycMetrics {
                 "Duration of KYC sessions in seconds",
             )
             .buckets(vec![60.0, 300.0, 900.0, 1800.0, 3600.0, 7200.0]),
-        )
-        .unwrap();
+        )?;
 
         // Verification metrics
         let verifications_total = Counter::new(
             "kyc_verifications_total",
             "Total number of KYC verifications",
-        )
-        .unwrap();
+        )?;
 
         let verifications_approved_total = Counter::new(
             "kyc_verifications_approved_total",
             "Total number of KYC verifications approved",
-        )
-        .unwrap();
+        )?;
 
         let verifications_rejected_total = Counter::new(
             "kyc_verifications_rejected_total",
             "Total number of KYC verifications rejected",
-        )
-        .unwrap();
+        )?;
 
         let verifications_manual_review_total = Counter::new(
             "kyc_verifications_manual_review_total",
             "Total number of KYC verifications sent to manual review",
-        )
-        .unwrap();
+        )?;
 
         let verification_processing_time_seconds = Histogram::with_opts(
             prometheus::HistogramOpts::new(
@@ -126,27 +123,23 @@ impl KycMetrics {
                 "Time taken to process KYC verifications",
             )
             .buckets(vec![60.0, 300.0, 900.0, 1800.0, 3600.0, 7200.0, 14400.0]),
-        )
-        .unwrap();
+        )?;
 
         // Document metrics
         let documents_submitted_total = Counter::new(
             "kyc_documents_submitted_total",
             "Total number of documents submitted",
-        )
-        .unwrap();
+        )?;
 
         let documents_approved_total = Counter::new(
             "kyc_documents_approved_total",
             "Total number of documents approved",
-        )
-        .unwrap();
+        )?;
 
         let documents_rejected_total = Counter::new(
             "kyc_documents_rejected_total",
             "Total number of documents rejected",
-        )
-        .unwrap();
+        )?;
 
         let document_processing_time_seconds = Histogram::with_opts(
             prometheus::HistogramOpts::new(
@@ -154,33 +147,28 @@ impl KycMetrics {
                 "Time taken to process documents",
             )
             .buckets(vec![10.0, 30.0, 60.0, 120.0, 300.0, 600.0]),
-        )
-        .unwrap();
+        )?;
 
         // Provider metrics
         let provider_api_requests_total = Counter::new(
             "kyc_provider_api_requests_total",
             "Total number of provider API requests",
-        )
-        .unwrap();
+        )?;
 
         let provider_api_errors_total = Counter::new(
             "kyc_provider_api_errors_total",
             "Total number of provider API errors",
-        )
-        .unwrap();
+        )?;
 
         let provider_webhook_received_total = Counter::new(
             "kyc_provider_webhook_received_total",
             "Total number of provider webhooks received",
-        )
-        .unwrap();
+        )?;
 
         let provider_webhook_errors_total = Counter::new(
             "kyc_provider_webhook_errors_total",
             "Total number of provider webhook errors",
-        )
-        .unwrap();
+        )?;
 
         let provider_response_time_seconds = Histogram::with_opts(
             prometheus::HistogramOpts::new(
@@ -188,21 +176,18 @@ impl KycMetrics {
                 "Provider API response time in seconds",
             )
             .buckets(vec![0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0]),
-        )
-        .unwrap();
+        )?;
 
         // Manual review metrics
         let manual_review_queue_depth = IntGauge::new(
             "kyc_manual_review_queue_depth",
             "Current depth of manual review queue",
-        )
-        .unwrap();
+        )?;
 
         let manual_review_cases_completed_total = Counter::new(
             "kyc_manual_review_cases_completed_total",
             "Total number of manual review cases completed",
-        )
-        .unwrap();
+        )?;
 
         let manual_review_avg_processing_time_seconds = Histogram::with_opts(
             prometheus::HistogramOpts::new(
@@ -210,198 +195,119 @@ impl KycMetrics {
                 "Time taken to process manual review cases",
             )
             .buckets(vec![300.0, 900.0, 1800.0, 3600.0, 7200.0, 14400.0, 28800.0]),
-        )
-        .unwrap();
+        )?;
 
         // EDD metrics
         let edd_cases_created_total = Counter::new(
             "kyc_edd_cases_created_total",
             "Total number of EDD cases created",
-        )
-        .unwrap();
+        )?;
 
         let edd_cases_resolved_total = Counter::new(
             "kyc_edd_cases_resolved_total",
             "Total number of EDD cases resolved",
-        )
-        .unwrap();
+        )?;
 
         let edd_active_cases =
-            IntGauge::new("kyc_edd_active_cases", "Current number of active EDD cases").unwrap();
+            IntGauge::new("kyc_edd_active_cases", "Current number of active EDD cases")?;
 
         let edd_triggers_total =
-            Counter::new("kyc_edd_triggers_total", "Total number of EDD triggers").unwrap();
+            Counter::new("kyc_edd_triggers_total", "Total number of EDD triggers")?;
 
         // Transaction limit metrics
         let limit_checks_total = Counter::new(
             "kyc_limit_checks_total",
             "Total number of transaction limit checks",
-        )
-        .unwrap();
+        )?;
 
         let limit_violations_total = Counter::new(
             "kyc_limit_violations_total",
             "Total number of transaction limit violations",
-        )
-        .unwrap();
+        )?;
 
         let volume_trackers_updated_total = Counter::new(
             "kyc_volume_trackers_updated_total",
             "Total number of volume tracker updates",
-        )
-        .unwrap();
+        )?;
 
         // Compliance metrics
         let compliance_alerts_total = Counter::new(
             "kyc_compliance_alerts_total",
             "Total number of compliance alerts",
-        )
-        .unwrap();
+        )?;
 
         let compliance_reports_generated_total = Counter::new(
             "kyc_compliance_reports_generated_total",
             "Total number of compliance reports generated",
-        )
-        .unwrap();
+        )?;
 
         let audit_exports_total = Counter::new(
             "kyc_audit_exports_total",
             "Total number of audit trail exports",
-        )
-        .unwrap();
+        )?;
 
         // System health metrics
         let kyc_service_health = Gauge::new(
             "kyc_service_health",
             "KYC service health (1 = healthy, 0 = unhealthy)",
-        )
-        .unwrap();
+        )?;
 
         let provider_health = Gauge::new(
             "kyc_provider_health",
             "Provider health (1 = healthy, 0 = unhealthy)",
-        )
-        .unwrap();
+        )?;
 
         let database_health = Gauge::new(
             "kyc_database_health",
             "Database health (1 = healthy, 0 = unhealthy)",
-        )
-        .unwrap();
+        )?;
 
-        // Register all metrics
-        registry
-            .register(Box::new(sessions_initiated_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(sessions_completed_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(sessions_expired_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(session_duration_seconds.clone()))
-            .unwrap();
+        // Register all metrics — propagate registration errors (e.g. duplicate
+        // metric name) as typed errors rather than panicking.
+        registry.register(Box::new(sessions_initiated_total.clone()))?;
+        registry.register(Box::new(sessions_completed_total.clone()))?;
+        registry.register(Box::new(sessions_expired_total.clone()))?;
+        registry.register(Box::new(session_duration_seconds.clone()))?;
 
-        registry
-            .register(Box::new(verifications_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(verifications_approved_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(verifications_rejected_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(verifications_manual_review_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(verification_processing_time_seconds.clone()))
-            .unwrap();
+        registry.register(Box::new(verifications_total.clone()))?;
+        registry.register(Box::new(verifications_approved_total.clone()))?;
+        registry.register(Box::new(verifications_rejected_total.clone()))?;
+        registry.register(Box::new(verifications_manual_review_total.clone()))?;
+        registry.register(Box::new(verification_processing_time_seconds.clone()))?;
 
-        registry
-            .register(Box::new(documents_submitted_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(documents_approved_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(documents_rejected_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(document_processing_time_seconds.clone()))
-            .unwrap();
+        registry.register(Box::new(documents_submitted_total.clone()))?;
+        registry.register(Box::new(documents_approved_total.clone()))?;
+        registry.register(Box::new(documents_rejected_total.clone()))?;
+        registry.register(Box::new(document_processing_time_seconds.clone()))?;
 
-        registry
-            .register(Box::new(provider_api_requests_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(provider_api_errors_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(provider_webhook_received_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(provider_webhook_errors_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(provider_response_time_seconds.clone()))
-            .unwrap();
+        registry.register(Box::new(provider_api_requests_total.clone()))?;
+        registry.register(Box::new(provider_api_errors_total.clone()))?;
+        registry.register(Box::new(provider_webhook_received_total.clone()))?;
+        registry.register(Box::new(provider_webhook_errors_total.clone()))?;
+        registry.register(Box::new(provider_response_time_seconds.clone()))?;
 
-        registry
-            .register(Box::new(manual_review_queue_depth.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(manual_review_cases_completed_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(manual_review_avg_processing_time_seconds.clone()))
-            .unwrap();
+        registry.register(Box::new(manual_review_queue_depth.clone()))?;
+        registry.register(Box::new(manual_review_cases_completed_total.clone()))?;
+        registry.register(Box::new(manual_review_avg_processing_time_seconds.clone()))?;
 
-        registry
-            .register(Box::new(edd_cases_created_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(edd_cases_resolved_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(edd_active_cases.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(edd_triggers_total.clone()))
-            .unwrap();
+        registry.register(Box::new(edd_cases_created_total.clone()))?;
+        registry.register(Box::new(edd_cases_resolved_total.clone()))?;
+        registry.register(Box::new(edd_active_cases.clone()))?;
+        registry.register(Box::new(edd_triggers_total.clone()))?;
 
-        registry
-            .register(Box::new(limit_checks_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(limit_violations_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(volume_trackers_updated_total.clone()))
-            .unwrap();
+        registry.register(Box::new(limit_checks_total.clone()))?;
+        registry.register(Box::new(limit_violations_total.clone()))?;
+        registry.register(Box::new(volume_trackers_updated_total.clone()))?;
 
-        registry
-            .register(Box::new(compliance_alerts_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(compliance_reports_generated_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(audit_exports_total.clone()))
-            .unwrap();
+        registry.register(Box::new(compliance_alerts_total.clone()))?;
+        registry.register(Box::new(compliance_reports_generated_total.clone()))?;
+        registry.register(Box::new(audit_exports_total.clone()))?;
 
-        registry
-            .register(Box::new(kyc_service_health.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(provider_health.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(database_health.clone()))
-            .unwrap();
+        registry.register(Box::new(kyc_service_health.clone()))?;
+        registry.register(Box::new(provider_health.clone()))?;
+        registry.register(Box::new(database_health.clone()))?;
 
-        Self {
+        Ok(Self {
             registry,
             sessions_initiated_total,
             sessions_completed_total,
@@ -437,7 +343,7 @@ impl KycMetrics {
             kyc_service_health,
             provider_health,
             database_health,
-        }
+        })
     }
 
     pub fn registry(&self) -> &Registry {
@@ -818,13 +724,13 @@ mod tests {
 
     #[test]
     fn test_metrics_creation() {
-        let metrics = KycMetrics::new();
+        let metrics = KycMetrics::new().expect("KycMetrics::new should succeed in tests");
         assert!(metrics.export().is_ok());
     }
 
     #[test]
     fn test_session_metrics() {
-        let metrics = KycMetrics::new();
+        let metrics = KycMetrics::new().expect("KycMetrics::new should succeed in tests");
         metrics.record_session_initiated(KycTier::Basic);
         metrics.record_session_completed(KycTier::Basic, 300.0);
 
