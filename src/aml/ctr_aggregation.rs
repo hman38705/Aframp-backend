@@ -30,10 +30,17 @@ pub struct CtrAggregationConfig {
 
 impl Default for CtrAggregationConfig {
     fn default() -> Self {
+        // SAFETY: These literals are valid decimal strings and will always parse
+        // successfully. Using compile-time constants avoids any runtime panic.
         Self {
-            individual_threshold: Decimal::from_str("5000000").unwrap(), // NGN 5M
-            corporate_threshold: Decimal::from_str("10000000").unwrap(), // NGN 10M
-            proximity_threshold: Decimal::from_str("0.9").unwrap(),      // 90%
+            individual_threshold: Decimal::from(5_000_000u64), // NGN 5M
+            corporate_threshold: Decimal::from(10_000_000u64), // NGN 10M
+            proximity_threshold: {
+                // 0.9 — represents 90 % proximity threshold.
+                // Decimal::from_str can't fail for this literal, but we
+                // express it as a ratio to stay panic-free.
+                Decimal::from(9u64) / Decimal::from(10u64)
+            },
         }
     }
 }
@@ -48,6 +55,45 @@ pub struct AggregationUpdateResult {
     pub proximity_warning: bool,
     pub applicable_threshold: Decimal,
     pub ctr_generated: Option<CtrGenerationResult>,
+}
+
+/// Compute WAT (UTC+1, no DST) day boundaries for `date` and return them in UTC.
+///
+/// # Errors
+/// Returns an error if the naive datetime cannot be converted to a unique WAT
+/// local time.  In practice WAT has no DST so this never fails.
+fn wat_day_boundaries(
+    wat_date: NaiveDate,
+) -> Result<(DateTime<Utc>, DateTime<Utc>), anyhow::Error> {
+    let naive_start = wat_date
+        .and_hms_opt(0, 0, 0)
+        .ok_or_else(|| anyhow::anyhow!("Invalid WAT start-of-day for date {}", wat_date))?;
+
+    let naive_end = wat_date
+        .and_hms_milli_opt(23, 59, 59, 999)
+        .ok_or_else(|| anyhow::anyhow!("Invalid WAT end-of-day for date {}", wat_date))?;
+
+    let start_wat = WAT
+        .from_local_datetime(&naive_start)
+        .single()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Ambiguous or non-existent WAT start-of-day for date {}",
+                wat_date
+            )
+        })?;
+
+    let end_wat = WAT
+        .from_local_datetime(&naive_end)
+        .single()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Ambiguous or non-existent WAT end-of-day for date {}",
+                wat_date
+            )
+        })?;
+
+    Ok((start_wat.with_timezone(&Utc), end_wat.with_timezone(&Utc)))
 }
 
 /// CTR Transaction Aggregation Service
@@ -96,7 +142,7 @@ impl CtrAggregationService {
         transaction_timestamp: DateTime<Utc>,
     ) -> Result<AggregationUpdateResult, anyhow::Error> {
         // Get the WAT day boundaries for this transaction
-        let (window_start, window_end) = self.get_wat_day_boundaries(transaction_timestamp);
+        let (window_start, window_end) = self.get_wat_day_boundaries(transaction_timestamp)?;
 
         info!(
             subject_id = %subject_id,
@@ -242,30 +288,20 @@ impl CtrAggregationService {
         })
     }
 
-    /// Get the WAT (West Africa Time) day boundaries for a given timestamp
+    /// Get the WAT (West Africa Time) day boundaries for a given timestamp.
     ///
-    /// Returns (start, end) where start is 00:00:00 WAT and end is 23:59:59.999 WAT
-    fn get_wat_day_boundaries(&self, timestamp: DateTime<Utc>) -> (DateTime<Utc>, DateTime<Utc>) {
-        // Convert UTC timestamp to WAT
-        let wat_time = timestamp.with_timezone(&WAT);
-        
-        // Get the date in WAT
-        let wat_date = wat_time.date_naive();
-        
-        // Create start of day in WAT (00:00:00)
-        let start_wat = WAT
-            .from_local_datetime(&wat_date.and_hms_opt(0, 0, 0).unwrap())
-            .single()
-            .unwrap();
-        
-        // Create end of day in WAT (23:59:59.999)
-        let end_wat = WAT
-            .from_local_datetime(&wat_date.and_hms_milli_opt(23, 59, 59, 999).unwrap())
-            .single()
-            .unwrap();
-        
-        // Convert back to UTC
-        (start_wat.with_timezone(&Utc), end_wat.with_timezone(&Utc))
+    /// Returns `(start, end)` where start is 00:00:00 WAT and end is
+    /// 23:59:59.999 WAT, both expressed in UTC.
+    ///
+    /// # Errors
+    /// Returns an error if the WAT naive datetimes cannot be mapped to a unique
+    /// local time (e.g. during a hypothetical DST transition — WAT is UTC+1
+    /// with no DST, so this should never occur in practice).
+    fn get_wat_day_boundaries(
+        &self,
+        timestamp: DateTime<Utc>,
+    ) -> Result<(DateTime<Utc>, DateTime<Utc>), anyhow::Error> {
+        wat_day_boundaries(timestamp.with_timezone(&WAT).date_naive())
     }
 
     /// Get existing aggregation or create a new one
@@ -376,17 +412,7 @@ impl CtrAggregationService {
         date: NaiveDate,
     ) -> Result<Option<CtrAggregation>, anyhow::Error> {
         // Convert date to WAT day boundaries
-        let start_wat = WAT
-            .from_local_datetime(&date.and_hms_opt(0, 0, 0).unwrap())
-            .single()
-            .unwrap();
-        let end_wat = WAT
-            .from_local_datetime(&date.and_hms_milli_opt(23, 59, 59, 999).unwrap())
-            .single()
-            .unwrap();
-
-        let window_start = start_wat.with_timezone(&Utc);
-        let window_end = end_wat.with_timezone(&Utc);
+        let (window_start, window_end) = wat_day_boundaries(date)?;
 
         let aggregation = sqlx::query_as::<_, CtrAggregation>(
             r#"
@@ -414,17 +440,7 @@ impl CtrAggregationService {
         date: NaiveDate,
     ) -> Result<Vec<CtrAggregation>, anyhow::Error> {
         // Convert date to WAT day boundaries
-        let start_wat = WAT
-            .from_local_datetime(&date.and_hms_opt(0, 0, 0).unwrap())
-            .single()
-            .unwrap();
-        let end_wat = WAT
-            .from_local_datetime(&date.and_hms_milli_opt(23, 59, 59, 999).unwrap())
-            .single()
-            .unwrap();
-
-        let window_start = start_wat.with_timezone(&Utc);
-        let window_end = end_wat.with_timezone(&Utc);
+        let (window_start, window_end) = wat_day_boundaries(date)?;
 
         let breaches = sqlx::query_as::<_, CtrAggregation>(
             r#"
@@ -453,17 +469,7 @@ impl CtrAggregationService {
         subject_type: CtrType,
     ) -> Result<Vec<CtrAggregation>, anyhow::Error> {
         // Convert date to WAT day boundaries
-        let start_wat = WAT
-            .from_local_datetime(&date.and_hms_opt(0, 0, 0).unwrap())
-            .single()
-            .unwrap();
-        let end_wat = WAT
-            .from_local_datetime(&date.and_hms_milli_opt(23, 59, 59, 999).unwrap())
-            .single()
-            .unwrap();
-
-        let window_start = start_wat.with_timezone(&Utc);
-        let window_end = end_wat.with_timezone(&Utc);
+        let (window_start, window_end) = wat_day_boundaries(date)?;
 
         // Determine threshold based on subject type
         let threshold = match subject_type {
@@ -499,32 +505,62 @@ impl CtrAggregationService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::NaiveDateTime;
+
+    // Helper: build a test service backed by a lazy (never-connected) pool.
+    // connect_lazy returns a Result; propagate rather than unwrap.
+    fn make_test_service() -> Result<CtrAggregationService, anyhow::Error> {
+        let pool = PgPool::connect_lazy("postgresql://localhost/test")
+            .map_err(|e| anyhow::anyhow!("Failed to create lazy pool: {}", e))?;
+        Ok(CtrAggregationService::new(pool, CtrAggregationConfig::default()))
+    }
 
     #[test]
     fn test_wat_day_boundaries() {
-        let service = CtrAggregationService::new(
-            PgPool::connect_lazy("postgresql://localhost/test").unwrap(),
-            CtrAggregationConfig::default(),
+        // Test with a UTC timestamp that falls on 2024-01-15 in WAT.
+        // WAT is UTC+1 (no DST), so 2024-01-15 00:30 UTC = 2024-01-15 01:30 WAT.
+        let timestamp = Utc
+            .with_ymd_and_hms(2024, 1, 15, 0, 30, 0)
+            .single()
+            .expect("valid timestamp");
+
+        let (start, end) =
+            wat_day_boundaries(timestamp.with_timezone(&WAT).date_naive())
+                .expect("WAT boundaries must be computable");
+
+        // Start should be 2024-01-14 23:00:00 UTC (= 2024-01-15 00:00:00 WAT)
+        assert_eq!(
+            start,
+            Utc.with_ymd_and_hms(2024, 1, 14, 23, 0, 0)
+                .single()
+                .expect("valid start")
         );
 
-        // Test with a UTC timestamp that falls on 2024-01-15 in WAT
-        // WAT is UTC+1, so 2024-01-15 00:30 UTC is 2024-01-15 01:30 WAT
-        let timestamp = Utc.with_ymd_and_hms(2024, 1, 15, 0, 30, 0).unwrap();
-        let (start, end) = service.get_wat_day_boundaries(timestamp);
-
-        // Start should be 2024-01-14 23:00:00 UTC (2024-01-15 00:00:00 WAT)
-        assert_eq!(start, Utc.with_ymd_and_hms(2024, 1, 14, 23, 0, 0).unwrap());
-        
-        // End should be 2024-01-15 22:59:59.999 UTC (2024-01-15 23:59:59.999 WAT)
-        assert_eq!(end, Utc.with_ymd_and_hms(2024, 1, 15, 22, 59, 59).unwrap().with_nanosecond(999_000_000).unwrap());
+        // End should be 2024-01-15 22:59:59.999 UTC (= 2024-01-15 23:59:59.999 WAT)
+        assert_eq!(
+            end,
+            Utc.with_ymd_and_hms(2024, 1, 15, 22, 59, 59)
+                .single()
+                .expect("valid end")
+                .with_nanosecond(999_000_000)
+                .expect("valid nanoseconds")
+        );
     }
 
     #[test]
     fn test_default_config() {
         let config = CtrAggregationConfig::default();
-        assert_eq!(config.individual_threshold, Decimal::from_str("5000000").unwrap());
-        assert_eq!(config.corporate_threshold, Decimal::from_str("10000000").unwrap());
-        assert_eq!(config.proximity_threshold, Decimal::from_str("0.9").unwrap());
+        // Compare against panic-free Decimal::from() equivalents
+        assert_eq!(config.individual_threshold, Decimal::from(5_000_000u64));
+        assert_eq!(config.corporate_threshold, Decimal::from(10_000_000u64));
+        assert_eq!(
+            config.proximity_threshold,
+            Decimal::from(9u64) / Decimal::from(10u64)
+        );
+    }
+
+    #[test]
+    fn test_make_test_service_succeeds() {
+        // Verifies the lazy-pool helper itself doesn't panic.
+        assert!(make_test_service().is_ok());
     }
 }
