@@ -74,6 +74,12 @@ impl CorsConfig {
         let mut final_origins = allowed_origins;
         final_origins.extend(custom_origins);
 
+        // Wildcard origin is insecure with credentialed requests — filter it out
+        if final_origins.iter().any(|o| o == "*") {
+            warn!("⚠️  CORS wildcard '*' origin detected in CORS_ALLOWED_ORIGINS — ignored. Use explicit origins.");
+            final_origins.retain(|o| o != "*");
+        }
+
         Self {
             allowed_origins: final_origins,
             allowed_methods: vec![
@@ -196,6 +202,14 @@ fn add_cors_headers(response: &mut Response<Body>, config: &CorsConfig, origin: 
     headers.insert(
         "Access-Control-Expose-Headers",
         HeaderValue::from_static("X-Request-ID, X-RateLimit-Remaining, X-RateLimit-Reset"),
+    );
+
+    // Vary: Origin must be present so that caches (CDN, proxies) serve the
+    // correct per-origin CORS response and never serve a cached response for
+    // one origin to a different origin.
+    headers.insert(
+        axum::http::header::VARY,
+        HeaderValue::from_static("Origin"),
     );
 }
 

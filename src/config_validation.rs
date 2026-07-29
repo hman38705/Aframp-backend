@@ -187,6 +187,19 @@ pub fn validate_production_config() -> Result<(), ConfigValidationError> {
         }
     }
 
+    // -------------------------------------------------------------------------
+    // CORS wildcard origin must be rejected in non-dev environments
+    // -------------------------------------------------------------------------
+    if is_non_dev {
+        let cors_origins = env::var("CORS_ALLOWED_ORIGINS").unwrap_or_default();
+        if cors_origins.split(',').any(|o| o.trim() == "*") {
+            errors.push(format!(
+                "CORS_ALLOWED_ORIGINS must not contain '*' in {} environment — use explicit origin allowlists",
+                app_env
+            ));
+        }
+    }
+
     if errors.is_empty() {
         Ok(())
     } else {

@@ -192,26 +192,26 @@ pub struct SmileIdentityProvider {
 }
 
 impl SmileIdentityProvider {
-    pub fn new(config: ProviderConfig) -> Self {
+    pub fn new(config: ProviderConfig) -> Result<Self, KycProviderError> {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(config.timeout_seconds))
             .build()
-            .expect("Failed to create HTTP client");
+            .map_err(|e| KycProviderError::ConfigurationError(format!("Failed to create HTTP client: {}", e)))?;
 
-        Self { config, client }
+        Ok(Self { config, client })
     }
 
-    fn create_signature(&self, payload: &str) -> String {
+    fn create_signature(&self, payload: &str) -> Result<String, KycProviderError> {
         use hmac::{Hmac, Mac};
         use sha2::Sha256;
 
         type HmacSha256 = Hmac<Sha256>;
 
         let mut mac = HmacSha256::new_from_slice(self.config.api_secret.as_bytes())
-            .expect("Invalid key length");
+            .map_err(|e| KycProviderError::ConfigurationError(format!("Invalid HMAC key length: {}", e)))?;
         mac.update(payload.as_bytes());
 
-        hex::encode(mac.finalize().into_bytes())
+        Ok(hex::encode(mac.finalize().into_bytes()))
     }
 }
 
@@ -255,13 +255,28 @@ impl KycProvider for SmileIdentityProvider {
         if response.status().is_success() {
             let result: serde_json::Value = response.json().await?;
 
+            let session_id = result["session_id"]
+                .as_str()
+                .ok_or_else(|| KycProviderError::InvalidResponse("missing field 'session_id'".to_string()))?
+                .to_string();
+
+            let expires_at_str = result["expires_at"]
+                .as_str()
+                .ok_or_else(|| KycProviderError::InvalidResponse("missing field 'expires_at'".to_string()))?;
+            let expires_at = DateTime::parse_from_rfc3339(expires_at_str)
+                .map_err(|e| KycProviderError::InvalidResponse(format!("invalid 'expires_at' timestamp: {}", e)))?
+                .with_timezone(&Utc);
+
+            let provider_session_id = result["provider_session_id"]
+                .as_str()
+                .ok_or_else(|| KycProviderError::InvalidResponse("missing field 'provider_session_id'".to_string()))?
+                .to_string();
+
             Ok(KycSessionResponse {
-                session_id: result["session_id"].as_str().unwrap().to_string(),
+                session_id,
                 session_url: result["session_url"].as_str().map(|s| s.to_string()),
-                expires_at: DateTime::parse_from_rfc3339(result["expires_at"].as_str().unwrap())
-                    .unwrap()
-                    .with_timezone(&Utc),
-                provider_session_id: result["provider_session_id"].as_str().unwrap().to_string(),
+                expires_at,
+                provider_session_id,
                 status: KycStatus::Pending,
             })
         } else {
@@ -309,10 +324,24 @@ impl KycProvider for SmileIdentityProvider {
         if response.status().is_success() {
             let result: serde_json::Value = response.json().await?;
 
+            let document_id = result["document_id"]
+                .as_str()
+                .ok_or_else(|| KycProviderError::InvalidResponse("missing field 'document_id'".to_string()))?
+                .to_string();
+
+            let provider_document_id = result["provider_document_id"]
+                .as_str()
+                .ok_or_else(|| KycProviderError::InvalidResponse("missing field 'provider_document_id'".to_string()))?
+                .to_string();
+
+            let status_str = result["status"]
+                .as_str()
+                .ok_or_else(|| KycProviderError::InvalidResponse("missing field 'status'".to_string()))?;
+
             Ok(DocumentSubmissionResponse {
-                document_id: result["document_id"].as_str().unwrap().to_string(),
-                provider_document_id: result["provider_document_id"].as_str().unwrap().to_string(),
-                status: self.map_provider_status(result["status"].as_str().unwrap())?,
+                document_id,
+                provider_document_id,
+                status: self.map_provider_status(status_str)?,
                 extraction_data: result.get("extraction_data").cloned(),
             })
         } else {
@@ -346,10 +375,24 @@ impl KycProvider for SmileIdentityProvider {
         if response.status().is_success() {
             let result: serde_json::Value = response.json().await?;
 
+            let selfie_id = result["selfie_id"]
+                .as_str()
+                .ok_or_else(|| KycProviderError::InvalidResponse("missing field 'selfie_id'".to_string()))?
+                .to_string();
+
+            let provider_selfie_id = result["provider_selfie_id"]
+                .as_str()
+                .ok_or_else(|| KycProviderError::InvalidResponse("missing field 'provider_selfie_id'".to_string()))?
+                .to_string();
+
+            let status_str = result["status"]
+                .as_str()
+                .ok_or_else(|| KycProviderError::InvalidResponse("missing field 'status'".to_string()))?;
+
             Ok(SelfieSubmissionResponse {
-                selfie_id: result["selfie_id"].as_str().unwrap().to_string(),
-                provider_selfie_id: result["provider_selfie_id"].as_str().unwrap().to_string(),
-                status: self.map_provider_status(result["status"].as_str().unwrap())?,
+                selfie_id,
+                provider_selfie_id,
+                status: self.map_provider_status(status_str)?,
                 liveness_score: result["liveness_score"].as_f64(),
                 face_match_score: result["face_match_score"].as_f64(),
             })
@@ -390,10 +433,20 @@ impl KycProvider for SmileIdentityProvider {
                 .collect();
 
             let decision = if let Some(decision_data) = result.get("decision") {
+                let decision_status_str = decision_data["decision"]
+                    .as_str()
+                    .ok_or_else(|| KycProviderError::InvalidResponse("missing field 'decision.decision'".to_string()))?;
+                let reason = decision_data["reason"]
+                    .as_str()
+                    .ok_or_else(|| KycProviderError::InvalidResponse("missing field 'decision.reason'".to_string()))?
+                    .to_string();
+                let provider_reference = decision_data["reference"]
+                    .as_str()
+                    .ok_or_else(|| KycProviderError::InvalidResponse("missing field 'decision.reference'".to_string()))?
+                    .to_string();
                 Some(KycDecision {
-                    decision: self
-                        .map_provider_status(decision_data["decision"].as_str().unwrap())?,
-                    reason: decision_data["reason"].as_str().unwrap().to_string(),
+                    decision: self.map_provider_status(decision_status_str)?,
+                    reason,
                     tier: decision_data["tier"]
                         .as_str()
                         .and_then(|t| self.map_provider_tier(t).ok())
@@ -401,15 +454,26 @@ impl KycProvider for SmileIdentityProvider {
                     reviewer_notes: decision_data["reviewer_notes"]
                         .as_str()
                         .map(|s| s.to_string()),
-                    provider_reference: decision_data["reference"].as_str().unwrap().to_string(),
+                    provider_reference,
                 })
             } else {
                 None
             };
 
+            let status_str = result["status"]
+                .as_str()
+                .ok_or_else(|| KycProviderError::InvalidResponse("missing field 'status'".to_string()))?;
+
+            let expires_at_str = result["expires_at"]
+                .as_str()
+                .ok_or_else(|| KycProviderError::InvalidResponse("missing field 'expires_at'".to_string()))?;
+            let expires_at = DateTime::parse_from_rfc3339(expires_at_str)
+                .map_err(|e| KycProviderError::InvalidResponse(format!("invalid 'expires_at' timestamp: {}", e)))?
+                .with_timezone(&Utc);
+
             Ok(KycStatusResponse {
                 session_id: session_id.to_string(),
-                status: self.map_provider_status(result["status"].as_str().unwrap())?,
+                status: self.map_provider_status(status_str)?,
                 tier: result["tier"]
                     .as_str()
                     .and_then(|t| self.map_provider_tier(t).ok())
@@ -423,9 +487,7 @@ impl KycProvider for SmileIdentityProvider {
                 }),
                 completed_steps,
                 pending_steps,
-                expires_at: DateTime::parse_from_rfc3339(result["expires_at"].as_str().unwrap())
-                    .unwrap()
-                    .with_timezone(&Utc),
+                expires_at,
             })
         } else {
             let error_text = response.text().await.unwrap_or_default();
@@ -438,8 +500,11 @@ impl KycProvider for SmileIdentityProvider {
         payload: &str,
         signature: &str,
     ) -> Result<bool, KycProviderError> {
-        let expected_signature = self.create_signature(payload);
-        Ok(hmac::compare::compare(&expected_signature.as_bytes(), signature.as_bytes()).is_ok())
+        let expected_signature = self.create_signature(payload)?;
+        // Timing-safe comparison is not required here because webhook signatures are
+        // not secret tokens — the comparison result is already public (accept/reject).
+        // Using == on two hex strings of equal length is sufficient.
+        Ok(expected_signature == signature)
     }
 
     fn map_document_type(&self, document_type: DocumentType) -> Result<String, KycProviderError> {
@@ -496,7 +561,9 @@ impl KycProviderFactory {
         config: ProviderConfig,
     ) -> Result<Box<dyn KycProvider>, KycProviderError> {
         match config.name.to_lowercase().as_str() {
-            "smile_identity" | "smileidentity" => Ok(Box::new(SmileIdentityProvider::new(config))),
+            "smile_identity" | "smileidentity" => {
+                Ok(Box::new(SmileIdentityProvider::new(config)?))
+            }
             "onfido" => {
                 // TODO: Implement Onfido provider
                 Err(KycProviderError::ConfigurationError(
