@@ -247,7 +247,7 @@ mod tests {
     fn test_kyc_metrics_creation() {
         use crate::kyc::observability::KycMetrics;
 
-        let metrics = KycMetrics::new();
+        let metrics = KycMetrics::new().expect("KycMetrics::new should succeed in tests");
 
         // Test that metrics can be recorded without panicking
         metrics.record_session_initiated(KycTier::Basic);
