@@ -17,6 +17,60 @@ pub struct AppConfig {
     pub kyc: KycConfig,
     /// Audit middleware configuration (Issue #717 — body-size limit).
     pub audit: AuditConfig,
+    /// Batch transaction endpoint limits (Issue #754).
+    pub batch: BatchConfig,
+}
+
+// ---------------------------------------------------------------------------
+// BatchConfig  (Issue #754 — batch size validation)
+// ---------------------------------------------------------------------------
+
+/// Configuration for batch transaction endpoints.
+///
+/// | Env var                        | Default | Description                                           |
+/// |--------------------------------|---------|-------------------------------------------------------|
+/// | `MAX_CNGN_BATCH_SIZE`          | `100`   | Maximum items per cNGN transfer batch.                |
+/// | `MAX_FIAT_BATCH_SIZE`          | `500`   | Maximum items per fiat payout batch.                  |
+///
+/// Both limits are enforced at the API layer before any DB work begins.
+/// Exceeding either returns HTTP 400 with error code `BATCH_TOO_LARGE`.
+#[derive(Debug, Clone)]
+pub struct BatchConfig {
+    /// Maximum items allowed per cNGN transfer batch. Default: 100.
+    pub max_cngn_batch_size: usize,
+    /// Maximum items allowed per fiat payout batch. Default: 500.
+    pub max_fiat_batch_size: usize,
+}
+
+impl BatchConfig {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        let max_cngn_batch_size = env::var("MAX_CNGN_BATCH_SIZE")
+            .unwrap_or_else(|_| "100".to_string())
+            .parse::<usize>()
+            .map_err(|_| ConfigError::InvalidValue("MAX_CNGN_BATCH_SIZE".to_string()))?;
+
+        if max_cngn_batch_size == 0 {
+            return Err(ConfigError::InvalidValue(
+                "MAX_CNGN_BATCH_SIZE must be greater than 0".to_string(),
+            ));
+        }
+
+        let max_fiat_batch_size = env::var("MAX_FIAT_BATCH_SIZE")
+            .unwrap_or_else(|_| "500".to_string())
+            .parse::<usize>()
+            .map_err(|_| ConfigError::InvalidValue("MAX_FIAT_BATCH_SIZE".to_string()))?;
+
+        if max_fiat_batch_size == 0 {
+            return Err(ConfigError::InvalidValue(
+                "MAX_FIAT_BATCH_SIZE must be greater than 0".to_string(),
+            ));
+        }
+
+        Ok(BatchConfig {
+            max_cngn_batch_size,
+            max_fiat_batch_size,
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -74,6 +128,20 @@ pub struct DatabaseConfig {
     pub read_replica_url: Option<String>,
     pub shard_configs: Vec<DatabaseShardConfig>,
     pub shard_checksum_interval_secs: u64,
+    /// Replication lag threshold for the `/health/edge` DNS-failover check (Issue #756).
+    ///
+    /// When the measured lag exceeds this value, `/health/edge` returns 503 so
+    /// Route 53 fails over to the next region.
+    ///
+    /// **Distinct from `DEFAULT_THRESHOLD_MS`** in `replication_monitor.rs`,
+    /// which is the circuit-breaker threshold (100 ms) that stops routing reads
+    /// to a lagging replica.  These are separate concerns:
+    ///   - Health-check threshold (default 5 s): coarse, drives DNS failover.
+    ///   - Circuit-breaker threshold (default 100 ms): fine-grained, prevents
+    ///     stale reads per-request.
+    ///
+    /// Loaded from `REPLICATION_LAG_HEALTH_THRESHOLD_SECS` (default: `5`).
+    pub replication_lag_health_threshold_secs: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -246,6 +314,7 @@ impl AppConfig {
             telemetry: TelemetryConfig::from_env()?,
             kyc: KycConfig::from_env()?,
             audit: AuditConfig::from_env()?,
+            batch: BatchConfig::from_env()?,
         })
     }
 
@@ -335,6 +404,10 @@ impl DatabaseConfig {
                 .unwrap_or_else(|_| "300".to_string())
                 .parse()
                 .map_err(|_| ConfigError::InvalidValue("DB_SHARD_CHECKSUM_INTERVAL_SECS".to_string()))?,
+            replication_lag_health_threshold_secs: env::var("REPLICATION_LAG_HEALTH_THRESHOLD_SECS")
+                .unwrap_or_else(|_| "5".to_string())
+                .parse()
+                .map_err(|_| ConfigError::InvalidValue("REPLICATION_LAG_HEALTH_THRESHOLD_SECS".to_string()))?,
         })
     }
 

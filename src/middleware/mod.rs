@@ -43,6 +43,7 @@ pub mod security;
 pub mod auth_rate_limit;
 #[cfg(feature = "database")]
 pub mod paystack_ip_allowlist;
+pub mod api_versioning;
 
 #[cfg(feature = "database")]
 pub use auth_rate_limit::{
