@@ -15,34 +15,45 @@ mod unit_tests {
     use std::str::FromStr;
     use uuid::Uuid;
 
+    // ─── helpers ──────────────────────────────────────────────────────────────
+
+    /// Parse a `Decimal` from a string literal, turning a parse failure into a
+    /// test failure with a descriptive message instead of an opaque panic.
+    fn dec(s: &str) -> Decimal {
+        Decimal::from_str(s)
+            .unwrap_or_else(|e| panic!("invalid Decimal literal {:?}: {}", s, e))
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+
     /// Test aggregation calculation
     #[test]
     fn test_aggregation_calculation() {
-        let amount1 = Decimal::from_str("1000000").unwrap();
-        let amount2 = Decimal::from_str("2500000").unwrap();
-        let amount3 = Decimal::from_str("1500000").unwrap();
+        let amount1 = dec("1000000");
+        let amount2 = dec("2500000");
+        let amount3 = dec("1500000");
 
         let total = amount1 + amount2 + amount3;
-        assert_eq!(total, Decimal::from_str("5000000").unwrap());
+        assert_eq!(total, dec("5000000"));
     }
 
-    /// Test NGN conversion (placeholder - would test actual conversion logic)
+    /// Test NGN conversion (placeholder — would test actual conversion logic)
     #[test]
     fn test_ngn_conversion() {
-        let usd_amount = Decimal::from_str("1000").unwrap();
-        let exchange_rate = Decimal::from_str("1500").unwrap(); // 1 USD = 1500 NGN
+        let usd_amount = dec("1000");
+        let exchange_rate = dec("1500"); // 1 USD = 1 500 NGN
         let ngn_amount = usd_amount * exchange_rate;
 
-        assert_eq!(ngn_amount, Decimal::from_str("1500000").unwrap());
+        assert_eq!(ngn_amount, dec("1500000"));
     }
 
     /// Test threshold detection for individual
     #[test]
     fn test_threshold_detection_individual() {
-        let threshold = Decimal::from_str("5000000").unwrap();
-        let amount_below = Decimal::from_str("4999999").unwrap();
-        let amount_at = Decimal::from_str("5000000").unwrap();
-        let amount_above = Decimal::from_str("5000001").unwrap();
+        let threshold = dec("5000000");
+        let amount_below = dec("4999999");
+        let amount_at = dec("5000000");
+        let amount_above = dec("5000001");
 
         assert!(amount_below < threshold);
         assert!(amount_at >= threshold);
@@ -52,10 +63,10 @@ mod unit_tests {
     /// Test threshold detection for corporate
     #[test]
     fn test_threshold_detection_corporate() {
-        let threshold = Decimal::from_str("10000000").unwrap();
-        let amount_below = Decimal::from_str("9999999").unwrap();
-        let amount_at = Decimal::from_str("10000000").unwrap();
-        let amount_above = Decimal::from_str("10000001").unwrap();
+        let threshold = dec("10000000");
+        let amount_below = dec("9999999");
+        let amount_at = dec("10000000");
+        let amount_above = dec("10000001");
 
         assert!(amount_below < threshold);
         assert!(amount_at >= threshold);
@@ -65,14 +76,14 @@ mod unit_tests {
     /// Test proximity threshold calculation
     #[test]
     fn test_proximity_threshold() {
-        let threshold = Decimal::from_str("5000000").unwrap();
-        let proximity_pct = Decimal::from_str("0.9").unwrap();
+        let threshold = dec("5000000");
+        let proximity_pct = dec("0.9");
         let proximity_amount = threshold * proximity_pct;
 
-        assert_eq!(proximity_amount, Decimal::from_str("4500000").unwrap());
+        assert_eq!(proximity_amount, dec("4500000"));
 
-        let amount_in_proximity = Decimal::from_str("4600000").unwrap();
-        let amount_not_in_proximity = Decimal::from_str("4400000").unwrap();
+        let amount_in_proximity = dec("4600000");
+        let amount_not_in_proximity = dec("4400000");
 
         assert!(amount_in_proximity >= proximity_amount);
         assert!(amount_not_in_proximity < proximity_amount);
@@ -85,7 +96,7 @@ mod unit_tests {
         let window_start = Utc::now();
         let window_end = window_start + Duration::days(1);
 
-        // Simulate checking for existing CTR
+        // Identical keys derived from the same subject/window must be equal.
         let existing_ctr_key = format!("{}:{}:{}", subject_id, window_start, window_end);
         let new_ctr_key = format!("{}:{}:{}", subject_id, window_start, window_end);
 
@@ -139,9 +150,9 @@ mod unit_tests {
         let config = CtrManagementConfig::default();
         let senior_threshold = config.senior_approval_threshold;
 
-        let amount_below = Decimal::from_str("49999999").unwrap();
-        let amount_at = Decimal::from_str("50000000").unwrap();
-        let amount_above = Decimal::from_str("50000001").unwrap();
+        let amount_below = dec("49999999");
+        let amount_at = dec("50000000");
+        let amount_above = dec("50000001");
 
         assert!(amount_below < senior_threshold);
         assert!(amount_at >= senior_threshold);
@@ -195,19 +206,18 @@ mod unit_tests {
     /// Test reminder schedule
     #[test]
     fn test_reminder_schedule() {
-        let deadline = Utc::now() + Duration::days(3);
         let now = Utc::now();
+        let deadline = now + Duration::days(3);
 
         let days_until = (deadline - now).num_days();
-
-        // Should send first reminder at 3 days
+        // First reminder fires at 3 days out.
         assert_eq!(days_until, 3);
 
-        // Test other reminder points
-        let one_day_before = Utc::now() + Duration::days(1);
+        // Other reminder points.
+        let one_day_before = now + Duration::days(1);
         assert_eq!((one_day_before - now).num_days(), 1);
 
-        let deadline_day = Utc::now();
+        let deadline_day = now;
         assert_eq!((deadline_day - now).num_days(), 0);
     }
 
@@ -226,14 +236,13 @@ mod unit_tests {
     /// Test amount reconciliation
     #[test]
     fn test_amount_reconciliation() {
-        let ctr_total = Decimal::from_str("5000000").unwrap();
+        let ctr_total = dec("5000000");
 
-        let tx1 = Decimal::from_str("1000000").unwrap();
-        let tx2 = Decimal::from_str("2000000").unwrap();
-        let tx3 = Decimal::from_str("2000000").unwrap();
+        let tx1 = dec("1000000");
+        let tx2 = dec("2000000");
+        let tx3 = dec("2000000");
 
         let calculated_total = tx1 + tx2 + tx3;
-
         assert_eq!(ctr_total, calculated_total);
     }
 
@@ -265,20 +274,11 @@ mod unit_tests {
     #[test]
     fn test_config_defaults() {
         let agg_config = CtrAggregationConfig::default();
-        assert_eq!(
-            agg_config.individual_threshold,
-            Decimal::from_str("5000000").unwrap()
-        );
-        assert_eq!(
-            agg_config.corporate_threshold,
-            Decimal::from_str("10000000").unwrap()
-        );
+        assert_eq!(agg_config.individual_threshold, dec("5000000"));
+        assert_eq!(agg_config.corporate_threshold, dec("10000000"));
 
         let mgmt_config = CtrManagementConfig::default();
-        assert_eq!(
-            mgmt_config.senior_approval_threshold,
-            Decimal::from_str("50000000").unwrap()
-        );
+        assert_eq!(mgmt_config.senior_approval_threshold, dec("50000000"));
         assert!(mgmt_config.enforce_checklist);
     }
 
@@ -290,15 +290,15 @@ mod unit_tests {
 
         assert_ne!(individual_type, corporate_type);
 
-        // Test threshold selection
-        let individual_threshold = Decimal::from_str("5000000").unwrap();
-        let corporate_threshold = Decimal::from_str("10000000").unwrap();
+        // Threshold selection must pick the right value per subject type.
+        let individual_threshold = dec("5000000");
+        let corporate_threshold = dec("10000000");
 
         let selected_threshold = match individual_type {
             CtrType::Individual => individual_threshold,
             CtrType::Corporate => corporate_threshold,
         };
 
-        assert_eq!(selected_threshold, individual_threshold);
+        assert_eq!(selected_threshold, dec("5000000"));
     }
 }
