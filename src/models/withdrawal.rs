@@ -14,6 +14,7 @@ pub struct Withdrawal {
     pub provider_reference: Option<String>,
     pub bank_code: Option<String>,
     pub account_number: Option<String>,
+    pub failure_reason: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

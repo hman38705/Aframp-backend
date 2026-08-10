@@ -60,7 +60,8 @@ pub async fn create_withdrawal(
          )
          VALUES ($1, $2, $3, 'pending', $4, $5)
          RETURNING id, merchant_id, amount_stroops, asset, status, provider,
-                   provider_reference, bank_code, account_number, created_at, updated_at",
+                   provider_reference, bank_code, account_number, failure_reason,
+                   created_at, updated_at",
     )
     .bind(withdrawal.merchant_id)
     .bind(withdrawal.amount_stroops)
@@ -96,7 +97,8 @@ pub async fn create_withdrawal(
                     SET provider = $2, provider_reference = $3, status = $4, updated_at = now()
                   WHERE id = $1
                   RETURNING id, merchant_id, amount_stroops, asset, status, provider,
-                            provider_reference, bank_code, account_number, created_at, updated_at",
+                            provider_reference, bank_code, account_number, failure_reason,
+                            created_at, updated_at",
             )
             .bind(w.id)
             .bind(&result.provider)
@@ -124,9 +126,12 @@ pub async fn create_withdrawal(
             .await?;
 
             sqlx::query(
-                "UPDATE withdrawals SET status = 'failed', updated_at = now() WHERE id = $1",
+                "UPDATE withdrawals
+                    SET status = 'failed', failure_reason = $2, updated_at = now()
+                  WHERE id = $1",
             )
             .bind(w.id)
+            .bind(&err)
             .execute(&mut *refund_tx)
             .await?;
 
@@ -143,7 +148,8 @@ pub async fn withdrawals_by_merchant(
 ) -> Result<Vec<Withdrawal>, sqlx::Error> {
     sqlx::query_as::<_, Withdrawal>(
         "SELECT id, merchant_id, amount_stroops, asset, status, provider,
-                provider_reference, bank_code, account_number, created_at, updated_at
+                provider_reference, bank_code, account_number, failure_reason,
+                created_at, updated_at
            FROM withdrawals
           WHERE merchant_id = $1
           ORDER BY created_at DESC
