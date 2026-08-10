@@ -4,7 +4,7 @@ pub mod blockchain;
 mod config;
 mod error;
 mod models;
-mod payments;
+pub mod payments;
 mod services;
 
 pub use config::AppConfig;
@@ -17,6 +17,7 @@ pub struct AppState {
     pub jwt_secret: std::sync::Arc<String>,
     pub webhook_secret: std::sync::Arc<String>,
     pub wallet_encryption_key: std::sync::Arc<[u8; 32]>,
+    pub payment_provider: std::sync::Arc<dyn payments::PaymentProvider>,
 }
 
 pub async fn build_state(config: &AppConfig) -> Result<AppState, Box<dyn std::error::Error>> {
@@ -30,6 +31,9 @@ pub async fn build_state(config: &AppConfig) -> Result<AppState, Box<dyn std::er
         jwt_secret: config.jwt_secret.clone(),
         webhook_secret: config.webhook_secret.clone(),
         wallet_encryption_key: std::sync::Arc::new(wallet_encryption_key),
+        payment_provider: std::sync::Arc::new(payments::paystack::PaystackProvider::new(
+            (*config.paystack_secret_key).clone(),
+        )),
     })
 }
 

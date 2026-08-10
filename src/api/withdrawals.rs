@@ -3,7 +3,7 @@ use axum::Json;
 use serde::Deserialize;
 
 use crate::auth::extractor::AuthUser;
-use crate::error::{bad_request, internal, ApiResult};
+use crate::error::{bad_gateway, bad_request, internal, ApiResult};
 use crate::models::{CreateWithdrawalRequest, NewWithdrawal, Withdrawal};
 use crate::services::withdrawals::{self, WithdrawalError};
 use crate::AppState;
@@ -28,6 +28,7 @@ pub async fn create(
     }
     let withdrawal = withdrawals::create_withdrawal(
         &state.db,
+        state.payment_provider.as_ref(),
         NewWithdrawal {
             merchant_id,
             amount_stroops: req.amount_stroops,
@@ -59,6 +60,11 @@ pub async fn list(
 fn map_withdrawal_error(err: WithdrawalError) -> (axum::http::StatusCode, Json<crate::error::ApiError>) {
     match err {
         WithdrawalError::InsufficientBalance => bad_request("insufficient available balance"),
+        WithdrawalError::UnsupportedAsset => bad_request("withdrawals are only supported for the cNGN asset"),
+        WithdrawalError::InvalidAmountPrecision => {
+            bad_request("amount_stroops must be a whole number of kobo")
+        }
+        WithdrawalError::PayoutFailed(msg) => bad_gateway(&msg),
         WithdrawalError::Database(e) => internal(e),
     }
 }

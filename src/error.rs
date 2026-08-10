@@ -25,6 +25,10 @@ pub fn unauthorized(message: &str) -> (StatusCode, Json<ApiError>) {
     error(StatusCode::UNAUTHORIZED, message)
 }
 
+pub fn bad_gateway(message: &str) -> (StatusCode, Json<ApiError>) {
+    error(StatusCode::BAD_GATEWAY, message)
+}
+
 pub fn internal<E: std::fmt::Display>(err: E) -> (StatusCode, Json<ApiError>) {
     tracing::error!(error = %err, "internal error");
     error(StatusCode::INTERNAL_SERVER_ERROR, "internal server error")

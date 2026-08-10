@@ -38,6 +38,7 @@ pub async fn state() -> Option<AppState> {
         jwt_secret: Arc::new("integration-test-secret".into()),
         webhook_secret: Arc::new("integration-test-webhook".into()),
         wallet_encryption_key: Arc::new([7u8; 32]),
+        payment_provider: Arc::new(aframp::payments::mock::MockProvider),
     })
 }
 
