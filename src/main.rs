@@ -21,7 +21,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = aframp::blockchain::worker::run(
         state.clone(),
         config.stellar_horizon_url.clone(),
-        config.stellar_system_wallet.clone(),
         config.stellar_poll_interval_secs,
     );
     tokio::spawn(listener);

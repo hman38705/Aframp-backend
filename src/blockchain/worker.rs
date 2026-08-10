@@ -8,11 +8,8 @@ use crate::models::{NewPayment, UpdateBalance, UpdatePaymentStatus};
 use crate::services::{balances, payments, wallets};
 use crate::AppState;
 
-pub async fn run(state: Arc<AppState>, horizon_url: String, system_wallet: Arc<String>, poll_interval_secs: u64) {
-    let listener = StellarListener {
-        horizon_url,
-        system_wallet: (*system_wallet).clone(),
-    };
+pub async fn run(state: Arc<AppState>, horizon_url: String, poll_interval_secs: u64) {
+    let listener = StellarListener { horizon_url };
 
     loop {
         if let Err(err) = poll_once(&state.db, &listener).await {
@@ -23,7 +20,17 @@ pub async fn run(state: Arc<AppState>, horizon_url: String, system_wallet: Arc<S
 }
 
 async fn poll_once(db: &PgPool, listener: &StellarListener) -> Result<(), String> {
-    let deposits = listener.fetch_deposits().await?;
+    let addresses: Vec<String> = wallets::all_wallets(db)
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|w| w.address)
+        .collect();
+    if addresses.is_empty() {
+        return Ok(());
+    }
+
+    let deposits = listener.fetch_deposits(&addresses).await?;
     for deposit in deposits {
         if let Err(err) = process_deposit(db, deposit).await {
             tracing::warn!(error = %err, "failed to process deposit");
