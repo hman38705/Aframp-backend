@@ -37,6 +37,7 @@ pub async fn state() -> Option<AppState> {
         db,
         jwt_secret: Arc::new("integration-test-secret".into()),
         webhook_secret: Arc::new("integration-test-webhook".into()),
+        wallet_encryption_key: Arc::new([7u8; 32]),
     })
 }
 

@@ -17,6 +17,7 @@ pub struct NewWallet {
     pub merchant_id: Uuid,
     pub address: String,
     pub network: String,
+    pub secret_key_encrypted: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

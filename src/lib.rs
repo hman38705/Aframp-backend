@@ -16,17 +16,20 @@ pub struct AppState {
     pub db: PgPool,
     pub jwt_secret: std::sync::Arc<String>,
     pub webhook_secret: std::sync::Arc<String>,
+    pub wallet_encryption_key: std::sync::Arc<[u8; 32]>,
 }
 
-pub async fn build_state(config: &AppConfig) -> Result<AppState, sqlx::Error> {
+pub async fn build_state(config: &AppConfig) -> Result<AppState, Box<dyn std::error::Error>> {
     let db = PgPoolOptions::new()
         .max_connections(5)
         .connect(&config.database_url)
         .await?;
+    let wallet_encryption_key = blockchain::wallet_crypto::parse_key(&config.wallet_encryption_key)?;
     Ok(AppState {
         db,
         jwt_secret: config.jwt_secret.clone(),
         webhook_secret: config.webhook_secret.clone(),
+        wallet_encryption_key: std::sync::Arc::new(wallet_encryption_key),
     })
 }
 

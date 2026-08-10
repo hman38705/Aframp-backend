@@ -9,6 +9,7 @@ pub struct AppConfig {
     pub stellar_system_wallet: Arc<String>,
     pub stellar_horizon_url: String,
     pub stellar_poll_interval_secs: u64,
+    pub wallet_encryption_key: Arc<String>,
 }
 
 impl AppConfig {
@@ -25,6 +26,7 @@ impl AppConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(60),
+            wallet_encryption_key: Arc::new(env("WALLET_ENCRYPTION_KEY")?),
         })
     }
 }

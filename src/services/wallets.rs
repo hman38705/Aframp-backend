@@ -1,29 +1,45 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::blockchain::{keypair, wallet_crypto};
 use crate::models::{NewWallet, Wallet};
+
+#[derive(Debug, thiserror::Error)]
+pub enum CreateWalletError {
+    #[error("failed to encrypt wallet secret: {0}")]
+    Encryption(String),
+    #[error(transparent)]
+    Database(#[from] sqlx::Error),
+}
 
 pub async fn create_wallet(
     db: &PgPool,
     merchant_id: Uuid,
     network: &str,
-) -> Result<Wallet, sqlx::Error> {
-    let address = format!("A{:x}{:x}", merchant_id.simple(), network.len());
+    encryption_key: &[u8; 32],
+) -> Result<Wallet, CreateWalletError> {
+    let generated = keypair::generate_keypair();
+    let secret_key_encrypted = wallet_crypto::encrypt(encryption_key, &generated.secret_seed)
+        .map_err(CreateWalletError::Encryption)?;
+
     let wallet = NewWallet {
         merchant_id,
-        address,
+        address: generated.public_address,
         network: network.to_string(),
+        secret_key_encrypted,
     };
     sqlx::query_as::<_, Wallet>(
-        "INSERT INTO wallets (merchant_id, address, network)
-         VALUES ($1, $2, $3)
+        "INSERT INTO wallets (merchant_id, address, network, secret_key_encrypted)
+         VALUES ($1, $2, $3, $4)
          RETURNING id, merchant_id, address, network, created_at",
     )
     .bind(wallet.merchant_id)
     .bind(&wallet.address)
     .bind(&wallet.network)
+    .bind(&wallet.secret_key_encrypted)
     .fetch_one(db)
     .await
+    .map_err(CreateWalletError::from)
 }
 
 pub async fn wallet_by_merchant(

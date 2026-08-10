@@ -16,7 +16,7 @@ pub async fn create(
         .merchant_id
         .ok_or_else(|| bad_request("no merchant associated with this account"))?;
     let network = req.network.unwrap_or_else(|| "stellar".into());
-    let wallet = wallets::create_wallet(&state.db, merchant_id, &network)
+    let wallet = wallets::create_wallet(&state.db, merchant_id, &network, &state.wallet_encryption_key)
         .await
         .map_err(internal)?;
     Ok(Json(wallet))
