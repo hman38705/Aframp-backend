@@ -5,6 +5,7 @@
 docker start aframp-postgres
 docker stop aframp-postgres
 docker exec -i aframp-postgres psql -U postgres -d aframp < migrations/0001_init.sql
+docker exec -i aframp-postgres psql -U postgres -d aframp < migrations/0002_wallet_secret_key.sql
 docker exec -it aframp-postgres psql -U postgres -d aframp
 docker logs -f aframp-postgres
 docker rm -f aframp-postgres   # destroys the container AND its data
@@ -15,6 +16,12 @@ cargo build
 RUST_LOG=info cargo run
 cargo test
 cargo fix --lib -p aframp   # auto-apply the dead-code/unused-import suggestions
+
+## Integration tests actually hit a database (see tests/common/mod.rs)
+## Without TEST_DATABASE_URL set, every test short-circuits and reports "ok"
+## without touching the DB. Always set it before trusting a green run:
+docker exec -i aframp-postgres psql -U postgres -c "CREATE DATABASE aframp_test;"   # one-time
+TEST_DATABASE_URL="postgres://postgres:postgres@localhost:5432/aframp_test" cargo test
 
 ## Generate secrets (JWT_SECRET / WEBHOOK_SECRET / WALLET_ENCRYPTION_KEY)
 openssl rand -hex 32
