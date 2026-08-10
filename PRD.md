@@ -110,12 +110,15 @@ A condensed view of what's verified vs. still a stub, independent of the MVP num
 
 These are real product/engineering decisions that need an answer before the next phase of work, not implementation details we can quietly decide alone:
 
-1. **Payout provider.** Withdrawals need to actually reach a Nigerian bank account. Candidates (Flutterwave, Paystack, or a direct bank-transfer API) need to be picked based on fees, payout speed, and account-verification requirements — this is a business decision as much as a technical one.
-2. **Settlement/sweep design.** Should merchant deposits stay in each merchant's individual Stellar wallet, or get swept into a platform settlement wallet? Sweeping simplifies operational key management and payout funding but adds a moving part and a trust/custody question worth stating explicitly to merchants.
-3. **Confirmation-depth policy.** Stellar has fast finality (~5s), so "wait N confirmations" matters less than on Bitcoin — but "immediate" still means zero protection against a reorg edge case. Needs an explicit policy, even if the answer is "confirm immediately is fine, here's why."
-4. **Payment request / QR payload format.** What does the QR code actually encode — a Stellar SEP-compatible payment URI, a custom Aframp deep link, or both? This affects which customer wallets can pay out of the box.
-5. **Asset scope.** Today deposit detection recognizes any asset Horizon reports (native XLM or credit assets by code). Is cNGN the only supported asset at launch, or does XLM itself need first-class support (e.g., for the friendbot-style testing flow to translate to a real product feature)?
-6. **Poll-based detection scaling.** Works today with a handful of wallets. At what wallet count does polling-per-address on a fixed interval become a bottleneck, and is the answer a smarter cursor/backoff strategy, or a move to Horizon's streaming (SSE) API?
+1. **Settlement & payout pipeline.** Originally tracked as two separate questions — a payout provider, and whether to sweep merchant wallets — research into cNGN's own redemption mechanics showed these are actually one two-stage pipeline, not independent choices:
+   - **Stage A — crypto → fiat conversion.** Merchant Stellar wallets get swept into an Aframp-controlled platform wallet, which periodically redeems cNGN for real NGN via the cNGN issuer (WrappedCBDC, `docs.cngn.co`). This is the piece the issuer directly solves — but it only pays out to a small set of **pre-whitelisted** Aframp-owned bank accounts, and whitelisting a new destination carries a **24-hour timelock**. That rules it out as a same-day, per-merchant payout mechanism on its own.
+   - **Stage B — fiat → individual merchant payout.** Once Aframp holds real NGN, a last-mile rail fans it out to each merchant's own bank account on demand. Paystack Transfers fits this specifically (resolve account → create recipient → initiate transfer → OTP finalize in live mode), as would Flutterwave or a direct NIBSS integration. Paystack requires a **Registered** (not Starter) business with compliance docs submitted before Transfers unlock at all — real lead time worth starting early, independent of when the code gets written.
+
+   Still open within this: which last-mile provider (compare fees and payout speed across Paystack/Flutterwave), and how Stage A redemption is triggered (batched on a schedule, or fired once a platform-wallet balance threshold is crossed).
+2. **Confirmation-depth policy.** Stellar has fast finality (~5s), so "wait N confirmations" matters less than on Bitcoin — but "immediate" still means zero protection against a reorg edge case. Needs an explicit policy, even if the answer is "confirm immediately is fine, here's why."
+3. **Payment request / QR payload format.** What does the QR code actually encode — a Stellar SEP-compatible payment URI, a custom Aframp deep link, or both? This affects which customer wallets can pay out of the box.
+4. **Asset scope.** Today deposit detection recognizes any asset Horizon reports (native XLM or credit assets by code). Is cNGN the only supported asset at launch, or does XLM itself need first-class support (e.g., for the friendbot-style testing flow to translate to a real product feature)?
+5. **Poll-based detection scaling.** Works today with a handful of wallets. At what wallet count does polling-per-address on a fixed interval become a bottleneck, and is the answer a smarter cursor/backoff strategy, or a move to Horizon's streaming (SSE) API?
 
 ## 10. Success metrics (proposed — pending confirmation)
 
@@ -131,14 +134,14 @@ No target numbers exist yet from the business side; these are proposed instrumen
 - **Custodial key risk.** Aframp holds every merchant's private key. `WALLET_ENCRYPTION_KEY` compromise would expose every merchant's funds. Key management (rotation, HSM/KMS vs. env var) needs to mature before real merchant funds are at stake.
 - **No real payout yet.** If withdrawal UX ships before a real payout provider is wired in, merchants would see a debited balance with no way to actually receive funds — a trust-destroying gap if exposed prematurely.
 - **Poll-interval latency.** A 60-second default poll interval means a merchant could wait up to a minute to see a payment confirmed — worth deciding if that's acceptable for a POS "instant" feel, or needs tightening.
+- **Regulatory scope creep.** Custodying every merchant's private key, converting crypto to fiat through a platform-controlled treasury, and fanning fiat back out to individual merchant bank accounts is, functionally, the deposit-taking and payment-transmission core of a bank — not just a payments API. Worth an explicit read on Nigerian licensing exposure (money transmission / PSP / MFB territory) before Stage A/B in §9.1 goes live with real merchant funds, not after.
 
 ## 12. Roadmap — near-term, ordered
 
 1. Payment request generation + QR payload (closes MVP items #2–#3, the biggest remaining product gap)
-2. Real payout provider integration for `/withdraw` (closes the "ledger says X, bank account has 0" gap)
+2. Settlement & payout pipeline: sweep merchant wallets → redeem cNGN via the issuer → last-mile payout via Paystack/Flutterwave (closes the "ledger says X, bank account has 0" gap — see §9.1)
 3. Confirmation-depth policy decision + implementation
-4. Settlement/sweep wallet design + implementation
-5. Cleanup: remove or repurpose `src/stellar/mod.rs`
+4. Cleanup: remove or repurpose `src/stellar/mod.rs`
 
 ---
 
