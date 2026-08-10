@@ -1,148 +1,152 @@
-# Aframp Backend
+# Aframp
 
-Rust/Axum backend for the Aframp platform — multi-region, edge-cached, globally distributed.
+**Building the POS network for Stellar in Africa.**
 
-> **Release history**: see [CHANGELOG.md](./CHANGELOG.md) for a full version history and migration log.
-
----
-
-## Global Edge-Caching & Read-Only Replicas (Issue #348)
-
-### Architecture Overview
+Aframp brings Stellar-powered payments into everyday physical commerce, starting in Nigeria. The idea is simple: Nigerians already understand the POS terminal — tap, transfer, withdraw. Aframp adds another familiar option on top of that muscle memory: **scan and pay**, settled on Stellar, without the merchant or customer ever needing to think about wallets, addresses, or blockchains.
 
 ```
-Client
-  │
-  ▼
-CloudFront (edge PoP — <30 ms for /public/*)
-  │
-  ▼
-Route 53 Latency Routing  ──►  us-east-1 ALB  ──►  Primary DB (RW)
-                           ──►  eu-west-1 ALB  ──►  Read Replica
-                           ──►  ap-southeast-1 ALB ► Read Replica
+Customer → Scan → Pay → Confirmed
 ```
 
-- CloudFront caches `/public/*` at the edge (TTL 5 min, stale-while-revalidate 60 s).
-- Route 53 latency routing directs each client to the nearest regional ALB.
-- Each regional gateway detects its region via the `REGION` env var and connects to the local read replica for eventual-consistency reads.
-- Strong-consistency requests are routed to the primary (us-east-1) via the `X-Consistency: strong` header.
+From the merchant's point of view, that's the whole product. Stellar is the settlement layer underneath; Aframp is the experience on top.
 
----
+## Why
 
-## Eventual vs Strong Consistency — Endpoint Mapping
+Cross-border commerce in Africa is fragmented across national payment systems — multiple currencies, high fees, slow settlement, and merchant onboarding that doesn't travel across borders. Stablecoins and blockchain rails already move value globally, fast and cheap. What's missing is the everyday, physical-commerce bridge between the two. Aframp aims to be that bridge: onboard merchants first, and let consumer demand for Stellar wallets follow.
 
-| Path prefix | Consistency | Cache policy | DB target | Notes |
-|---|---|---|---|---|
-| `/public/*` | **Eventual** | `public, max-age=300, stale-while-revalidate=60` | Read replica | Exchange rates, fee schedules, public docs |
-| `/api/v1/rates` | **Eventual** | `public, max-age=300, stale-while-revalidate=60` | Read replica | Rate feed — tolerates 5 min staleness |
-| `/api/v1/fees` | **Eventual** | `public, max-age=300, stale-while-revalidate=60` | Read replica | Fee structures |
-| `/account/*` | **Strong** | `no-store, private` | Primary | Balances, profile, KYC status |
-| `/api/v1/onramp/*` | **Strong** | `no-store, private` | Primary | Payment initiation |
-| `/api/v1/offramp/*` | **Strong** | `no-store, private` | Primary | Redemption / withdrawal |
-| `/api/v1/mint/*` | **Strong** | `no-store, private` | Primary | Token minting |
-| `/api/v1/transaction*` | **Strong** | `no-store, private` | Primary | Transaction history writes |
-| `/api/v1/transfer*` | **Strong** | `no-store, private` | Primary | Transfers |
-| `/api/v1/redemption*` | **Strong** | `no-store, private` | Primary | Redemption flow |
-| `/health/edge` | N/A | `no-store` | Primary (lag check) | DNS failover probe |
+Longer-term shape of the platform (not all built yet — see [Status](#status) below):
 
-### Forcing Strong Consistency
-
-Any endpoint can be forced to the primary by sending:
-
-```http
-X-Consistency: strong
-```
-
-The gateway will:
-1. Set `X-Route-Primary: true` on the response (read by the load balancer).
-2. Select `DATABASE_URL` (primary) instead of `DATABASE_READ_REPLICA_URL`.
-
-### Consistency Header Flow
-
-```
-Request  ──► Gateway middleware (edge_cache.rs)
-              │
-              ├─ X-Consistency: strong?
-              │     YES → X-Route-Primary: true, use DATABASE_URL
-              │     NO  → use DATABASE_READ_REPLICA_URL (if available)
-              │
-              └─ Path-based Cache-Control injected on response
-```
-
----
-
-## Health & Failover
-
-`GET /health/edge` — used by Route 53 health checks.
-
-| Condition | HTTP | DNS action |
-|---|---|---|
-| All dependencies healthy, lag ≤ 5 s | `200 OK` | No action |
-| Replication lag > 5 s | `503` | Route 53 fails over to next region |
-| Any dependency down | `503` | Route 53 fails over to next region |
-
-Response body example:
-
-```json
-{ "status": "healthy", "region": "eu-west-1", "replication_lag_secs": 0 }
-```
-
----
-
-## Infrastructure
-
-| File | Purpose |
+| Layer | Purpose |
 |---|---|
-| `infra/terraform/edge.tf` | CloudFront distribution + path-based cache policies |
-| `infra/terraform/global_lb.tf` | Route 53 latency routing + health checks |
+| **Aframp Pay** | Merchant-facing payments: requests, QR codes, receive Stellar payments, receipts, revenue tracking |
+| **Aframp Wallet** | Consumer wallet built for spending, not just holding |
+| **Aframp Business** | Merchant dashboard: analytics, reconciliation, multi-location, invoices |
+| **Aframp API** | Infrastructure layer for other African fintechs to integrate Stellar payments |
 
-### Required Environment Variables (per region)
+This repository is the backend underneath **Aframp Pay**.
 
-| Variable | Description |
+## Status: MVP in progress
+
+The MVP is scoped to seven things: merchant accounts, payment request generation, QR-based payment, Stellar transaction creation, transaction monitoring, payment confirmation, and merchant transaction history. Here's what's live today:
+
+| MVP capability | Status |
 |---|---|
-| `REGION` | AWS region this instance runs in (e.g. `eu-west-1`) |
-| `DATABASE_URL` | Primary PostgreSQL URL (us-east-1) |
-| `DATABASE_READ_REPLICA_URL` | Local read replica URL |
+| Merchant accounts (signup/login) | ✅ Done |
+| Payment request generation | 🚧 Not yet started |
+| QR-based payment | 🚧 Not yet started |
+| Stellar transaction creation | 🚧 `StellarClient` scaffolded, not implemented |
+| Transaction monitoring | 🚧 Polling worker scaffolded, detection logic not implemented |
+| Payment confirmation | 🚧 Schema supports the `detected → verified → confirmed` pipeline; nothing populates it yet |
+| Merchant transaction history | ✅ Done |
 
----
+Also implemented, one layer ahead of the MVP list: fiat withdrawals (cash out a cNGN balance to a bank account) and merchant API keys (test/live).
 
-## Latency Verification
+## How it will work
+
+A merchant enters an amount — say ₦10,000 — and Aframp generates a payment request and QR code. A customer scans it with a Stellar-compatible wallet and pays. Aframp watches the Stellar network, detects and verifies the transaction, and confirms it back to the merchant. The merchant never sees a blockchain explorer; they see "Payment received."
+
+Today, in this codebase, that maps to:
+
+- A merchant is created via `/signup` and gets a **Stellar wallet** address (`/wallet/create`).
+- Off-ramp deposits (customer → merchant, in cNGN on Stellar) are meant to be picked up by a background worker polling [Stellar Horizon](https://developers.stellar.org/docs/data/horizon), correlated to a merchant via memo, and moved through a `detected → verified → confirmed` pipeline into the merchant's `balance`.
+- Merchants can withdraw their available cNGN balance to a Nigerian bank account (`/withdraw`), which is where fiat actually leaves the system.
+
+## Tech stack
+
+- **Rust** + [Axum](https://github.com/tokio-rs/axum) — HTTP API
+- **PostgreSQL** via [sqlx](https://github.com/launchbadge/sqlx) — compile-time-checked queries
+- **Stellar** ([Horizon](https://developers.stellar.org/docs/data/horizon)) — settlement network, cNGN as the initial asset
+- **JWT** ([jsonwebtoken](https://github.com/Keats/jsonwebtoken)) + **Argon2** — auth and password hashing
+- **Tokio** — async runtime, including the background Stellar polling worker
+
+## Getting started
+
+### Prerequisites
+
+- Rust (stable, 2021 edition)
+- PostgreSQL (local or remote)
+
+### Setup
 
 ```bash
-# Run against staging
-BASE_URL=https://staging-api.aframp.io ./dist-test.sh
-
-# Run against production with regional IP overrides
-US_EAST_1_IP=1.2.3.4 EU_WEST_1_IP=5.6.7.8 AP_SOUTHEAST_1_IP=9.10.11.12 \
-  ./dist-test.sh https://api.aframp.io
+cp .env.example .env
 ```
 
-Target: **< 30 ms** average for `/public/*` endpoints (cache hit at CloudFront PoP).
+Fill in `.env`:
 
----
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `DATABASE_URL` | yes | — | Postgres connection string |
+| `APP_BIND_ADDR` | no | `127.0.0.1:3000` | Address the HTTP server binds to |
+| `JWT_SECRET` | yes | — | Secret used to sign merchant session tokens |
+| `WEBHOOK_SECRET` | yes | — | Secret used to verify inbound provider webhooks |
+| `STELLAR_SYSTEM_WALLET_ADDRESS` | yes | — | The Stellar account Aframp watches for incoming deposits |
+| `STELLAR_HORIZON_URL` | no | `https://horizon-testnet.stellar.org` | Horizon endpoint to poll |
+| `STELLAR_POLL_INTERVAL_SECS` | no | `60` | How often the confirmation worker polls Horizon |
 
-## Worker Configuration
+Run migrations and start the server:
 
-### Stellar Confirmation Worker (#782)
+```bash
+cargo install sqlx-cli --no-default-features --features rustls,postgres
+sqlx database create
+sqlx migrate run
 
-| Env var | Default | Dev | Prod | Description |
-|---|---|---|---|---|
-| `STELLAR_CONFIRM_POLL_INTERVAL_SECS` | `15` | `1` | `5` | How often the worker polls Horizon for pending confirmations |
-| `STELLAR_CONFIRM_THRESHOLD` | `1` | `1` | `1` | Minimum ledger confirmations before marking complete |
-| `STELLAR_CONFIRM_STALE_TIMEOUT_SECS` | `1800` | `60` | `1800` | Transactions older than this are flagged stale |
-| `STELLAR_CONFIRM_BATCH_SIZE` | `200` | `50` | `200` | Max transactions fetched per polling cycle |
-| `STELLAR_CONFIRM_WINDOW_HOURS` | `48` | `1` | `48` | Look-back window for active transactions |
+cargo run
+```
 
-### Address Book Maintenance Worker (#783)
+The server starts on `APP_BIND_ADDR` (default `http://127.0.0.1:3000`) and spawns the Stellar confirmation worker in the background.
 
-| Env var | Default | Description |
-|---|---|---|
-| `ADDRESS_BOOK_REVERIFY_BATCH_SIZE` | `100` | Max Stellar addresses re-verified per maintenance cycle. Lower under high Horizon load. |
+### Running tests
 
-### Event Bus (#784)
+Integration tests need a separate database and are skipped automatically if it isn't configured:
 
-| Env var | Default | Description |
-|---|---|---|
-| `EVENT_BUS_CHANNEL_CAPACITY` | `1024` | Tokio broadcast channel buffer size. Increase if consumers log `aframp_event_bus_dropped_total` warnings. |
+```bash
+export TEST_DATABASE_URL=postgres://postgres:postgres@localhost/aframp_test
+sqlx database create --database-url "$TEST_DATABASE_URL"
+cargo test
+```
 
-When a slow consumer lags behind the buffer, dropped messages are logged at `WARN` level with the count and the `aframp_event_bus_dropped_total` metric is incremented. Use `EventBus::subscribe_guarded()` instead of `subscribe()` to get lag detection automatically.
+## API reference
+
+All authenticated routes expect `Authorization: Bearer <token>`, where `<token>` is the JWT returned from `/signup` or `/login`.
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `POST` | `/signup` | — | Create a user + merchant account. Body: `{ email, password (min 8 chars), name }` |
+| `POST` | `/login` | — | Authenticate. Body: `{ email, password }` |
+| `POST` | `/wallet/create` | ✅ | Create a Stellar wallet for the authenticated merchant. Body: `{ network? }` (defaults to `stellar`) |
+| `GET` | `/wallet` | ✅ | Get the merchant's wallet |
+| `GET` | `/balance` | ✅ | List balances by asset |
+| `GET` | `/transactions?limit=` | ✅ | List the merchant's payments (default limit 50, max 200) |
+| `POST` | `/withdraw` | ✅ | Withdraw available balance to a bank account. Body: `{ amount_stroops, asset?, bank_code, account_number }` |
+| `GET` | `/withdrawals?limit=` | ✅ | List the merchant's withdrawals |
+| `GET` | `/health` | — | Liveness check (`204 No Content`) |
+
+`/signup` and `/login` both return:
+
+```json
+{ "token": "...", "user_id": "...", "merchant_id": "..." }
+```
+
+## Project layout
+
+```
+src/
+  api/         HTTP handlers (thin — validation + calling services)
+  auth/        JWT signing/verification, password hashing, auth extractor
+  blockchain/  Background worker that polls Stellar Horizon
+  stellar/     Stellar client (deposit detection, memo correlation)
+  models/      Request/response and row types
+  services/    Business logic (users, wallets, balances, payments, withdrawals)
+  payments/    Pluggable payment provider abstraction (mock provider for now)
+migrations/    SQL schema migrations (sqlx)
+tests/         Integration tests (auth, wallet, withdrawal flows)
+```
+
+## Why Nigeria first
+
+Nigeria has a large digital-payments ecosystem and near-universal familiarity with POS and bank-transfer payments — the exact behavior Aframp is extending rather than replacing. The plan is to prove the merchant payment experience narrowly here, then expand to other African markets and cross-border corridors.
+
+## Contributing
+
+This project is under active MVP development — expect the API and schema to change as payment requests, QR flows, and Stellar transaction confirmation land. Open an issue or PR against `master`.
