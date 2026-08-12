@@ -4,8 +4,7 @@
 ## Database (Docker Postgres — dev only)
 docker start aframp-postgres
 docker stop aframp-postgres
-docker exec -i aframp-postgres psql -U postgres -d aframp < migrations/0001_init.sql
-docker exec -i aframp-postgres psql -U postgres -d aframp < migrations/0002_wallet_secret_key.sql
+for f in migrations/*.sql; do docker exec -i aframp-postgres psql -U postgres -d aframp < "$f"; done
 docker exec -it aframp-postgres psql -U postgres -d aframp
 docker logs -f aframp-postgres
 docker rm -f aframp-postgres   # destroys the container AND its data
@@ -56,10 +55,19 @@ curl -sS http://127.0.0.1:3000/balance -H "Authorization: Bearer $TOKEN"
 curl -sS http://127.0.0.1:3000/transactions -H "Authorization: Bearer $TOKEN"
 curl -sS "http://127.0.0.1:3000/transactions?limit=10" -H "Authorization: Bearer $TOKEN"
 
+## Payment requests (create requires TOKEN; get is deliberately public)
+curl -sS -X POST http://127.0.0.1:3000/payment-requests \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"amount_stroops":25000000}'   # defaults to asset=XLM, expires_in_secs=900
+
+curl -sS http://127.0.0.1:3000/payment-requests/<id>   # no auth header
+
 ## Withdrawals (requires TOKEN)
+## amount_stroops must be a whole multiple of 100,000 (1 kobo) and asset must be cNGN.
+## Paystack's own minimum transfer is NGN 50 = 500,000,000 stroops.
 curl -sS -X POST http://127.0.0.1:3000/withdraw \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"amount_stroops":1000,"bank_code":"058","account_number":"0123456789"}'
+  -d '{"amount_stroops":500000000,"asset":"cNGN","bank_code":"058","account_number":"0123456789"}'
 
 curl -sS http://127.0.0.1:3000/withdrawals -H "Authorization: Bearer $TOKEN"
 
