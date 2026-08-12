@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod balances;
+pub mod payment_requests;
 pub mod transactions;
 pub mod wallets;
 pub mod withdrawals;

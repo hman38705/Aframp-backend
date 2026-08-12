@@ -5,7 +5,7 @@ use sqlx::PgPool;
 
 use crate::blockchain::stellar::{BlockchainListener, StellarListener};
 use crate::models::{NewPayment, UpdateBalance, UpdatePaymentStatus};
-use crate::services::{balances, payments, wallets};
+use crate::services::{balances, payment_requests, payments, wallets};
 use crate::AppState;
 
 pub async fn run(state: Arc<AppState>, horizon_url: String, poll_interval_secs: u64) {
@@ -44,6 +44,7 @@ async fn process_deposit(db: &PgPool, d: crate::blockchain::stellar::DetectedDep
     else {
         return Ok(());
     };
+    let memo = d.memo.clone();
 
     let payment = payments::record_deposit(
         db,
@@ -95,6 +96,25 @@ async fn process_deposit(db: &PgPool, d: crate::blockchain::stellar::DetectedDep
     )
     .await
     .map_err(|e| e.to_string())?;
+
+    if let Some(memo) = memo {
+        if let Some(pr) = payment_requests::find_pending_by_wallet_and_memo(db, wallet.id, &memo)
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            if pr.amount_stroops != payment.amount_stroops {
+                tracing::warn!(
+                    expected = pr.amount_stroops,
+                    actual = payment.amount_stroops,
+                    request_id = %pr.id,
+                    "payment request amount mismatch — marking paid anyway"
+                );
+            }
+            payment_requests::mark_paid(db, pr.id, payment.id)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    }
 
     // TODO: dispatch payment.confirmed webhook.
     Ok(())

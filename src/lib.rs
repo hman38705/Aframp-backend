@@ -5,7 +5,7 @@ mod config;
 mod error;
 mod models;
 pub mod payments;
-mod services;
+pub mod services;
 
 pub use config::AppConfig;
 
@@ -52,5 +52,13 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/transactions", axum::routing::get(api::transactions::list))
         .route("/withdraw", axum::routing::post(api::withdrawals::create))
         .route("/withdrawals", axum::routing::get(api::withdrawals::list))
+        .route(
+            "/payment-requests",
+            axum::routing::post(api::payment_requests::create),
+        )
+        .route(
+            "/payment-requests/{id}",
+            axum::routing::get(api::payment_requests::get),
+        )
         .with_state(state)
 }

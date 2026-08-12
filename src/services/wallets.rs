@@ -66,6 +66,15 @@ pub async fn all_wallets(db: &PgPool) -> Result<Vec<Wallet>, sqlx::Error> {
     .await
 }
 
+pub async fn wallet_by_id(db: &PgPool, id: Uuid) -> Result<Option<Wallet>, sqlx::Error> {
+    sqlx::query_as::<_, Wallet>(
+        "SELECT id, merchant_id, address, network, created_at FROM wallets WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await
+}
+
 pub async fn wallet_by_address(db: &PgPool, address: &str) -> Result<Option<Wallet>, sqlx::Error> {
     sqlx::query_as::<_, Wallet>(
         "SELECT id, merchant_id, address, network, created_at FROM wallets WHERE address = $1",

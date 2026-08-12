@@ -8,6 +8,9 @@ pub struct DetectedDeposit {
     pub amount_stroops: i64,
     pub asset: String,
     pub confirmations: i32,
+    /// The parent transaction's memo, if any — used to correlate a deposit to
+    /// a specific payment request rather than just "something arrived."
+    pub memo: Option<String>,
 }
 
 #[async_trait]
@@ -66,6 +69,14 @@ struct OperationRecord {
     asset_type: Option<String>,
     #[serde(default)]
     asset_code: Option<String>,
+    #[serde(default)]
+    transaction: Option<EmbeddedTransaction>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EmbeddedTransaction {
+    #[serde(default)]
+    memo: Option<String>,
 }
 
 /// Polls Horizon's per-account payments feed for one wallet address and maps
@@ -75,7 +86,7 @@ struct OperationRecord {
 /// operation types are handled here, not just `payment`.
 async fn fetch_for_address(horizon_url: &str, address: &str) -> Result<Vec<DetectedDeposit>, String> {
     let url = format!(
-        "{}/accounts/{address}/payments?order=desc&limit=20&include_failed=false",
+        "{}/accounts/{address}/payments?order=desc&limit=20&include_failed=false&join=transactions",
         horizon_url.trim_end_matches('/')
     );
 
@@ -128,12 +139,15 @@ async fn fetch_for_address(horizon_url: &str, address: &str) -> Result<Vec<Detec
             _ => record.asset_code.clone().unwrap_or_else(|| "unknown".into()),
         };
 
+        let memo = record.transaction.as_ref().and_then(|t| t.memo.clone());
+
         deposits.push(DetectedDeposit {
             tx_hash: record.transaction_hash,
             destination: address.to_string(),
             amount_stroops,
             asset,
             confirmations: 1,
+            memo,
         });
     }
     Ok(deposits)
