@@ -143,17 +143,23 @@ TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/aframp_test cargo 
 
 ## API reference
 
+**Building a frontend?** Start with **[`API.md`](API.md)** — the full contract with request/response examples, error semantics, the stroops convention, polling guidance, and the known gaps worth designing around. **[`openapi.yaml`](openapi.yaml)** is the machine-readable version; generate a typed client from it rather than hand-writing calls.
+
+The table below is a quick index.
+
 All authenticated routes expect `Authorization: Bearer <token>`, where `<token>` is the JWT returned from `/signup` or `/login`.
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `POST` | `/signup` | — | Create a user + merchant account. Body: `{ email, password (min 8 chars), name }` |
 | `POST` | `/login` | — | Authenticate. Body: `{ email, password }` |
+| `GET` | `/me` | ✅ | Current user + merchant profile. The JWT carries only ids, so a reloaded frontend needs this to render identity |
 | `POST` | `/wallet/create` | ✅ | Generate a real Stellar wallet for the authenticated merchant. Body: `{ network? }` (defaults to `stellar`) |
 | `GET` | `/wallet` | ✅ | Get the merchant's wallet |
 | `GET` | `/balance` | ✅ | List balances by asset, reflecting real detected Stellar deposits |
 | `GET` | `/transactions?limit=` | ✅ | List the merchant's detected payments (default limit 50, max 200) |
 | `POST` | `/payment-requests` | ✅ | Create a payment request for the authenticated merchant's wallet. Body: `{ amount_stroops, asset? (default XLM), expires_in_secs? (60–86400, default 900) }` |
+| `GET` | `/payment-requests?limit=` | ✅ | List the merchant's own requests, newest first (default 50, max 200) |
 | `GET` | `/payment-requests/{id}` | — | Deliberately public — a customer's wallet needs to read amount/destination/status before paying. Includes `sep7_uri` for XLM requests (`null` for cNGN — no issuer address configured yet) |
 | `POST` | `/withdraw` | ✅ | Debit available balance, record a withdrawal, and call Paystack Transfers. Body: `{ amount_stroops, asset? (cNGN only), bank_code, account_number }`. **Note:** the Paystack call is real, but nothing actually pays out yet — Paystack's own account balance is unfunded (Stage A gap) — see [Status](#status-real-progress-not-aspiration) |
 | `GET` | `/withdrawals?limit=` | ✅ | List the merchant's withdrawals, including `failure_reason` on failed ones |
@@ -179,6 +185,9 @@ src/
   stellar/     Vestigial unused stub from an earlier design — see Status
 migrations/    SQL schema migrations (sqlx)
 tests/         Integration tests (auth, wallet, payment request, withdrawal flows)
+examples/      prove_payment_loop.rs — end-to-end demo harness (real testnet payment)
+API.md         Full API contract for frontend consumers
+openapi.yaml   Machine-readable spec (generate a typed client from this)
 command.txt    Copy-paste command reference for running/testing/interacting with the backend
 ```
 

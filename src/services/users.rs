@@ -88,6 +88,15 @@ pub async fn login(db: &PgPool, email: &str, password_raw: &str) -> Result<(User
     Ok((user, merchant))
 }
 
+pub async fn user_by_id(db: &PgPool, user_id: uuid::Uuid) -> Result<Option<User>, sqlx::Error> {
+    sqlx::query_as::<_, User>(
+        "SELECT id, email, password_hash, name, created_at, updated_at FROM users WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(db)
+    .await
+}
+
 pub async fn merchant_by_user(db: &PgPool, user_id: uuid::Uuid) -> Result<Option<Merchant>, sqlx::Error> {
     sqlx::query_as::<_, Merchant>(
         "SELECT id, user_id, name, created_at FROM merchants WHERE user_id = $1 LIMIT 1",

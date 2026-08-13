@@ -123,6 +123,68 @@ async fn payment_request_reports_expired_past_its_expiry() {
 }
 
 #[tokio::test]
+async fn payment_request_list_is_scoped_to_the_authenticated_merchant() {
+    let Some(state) = state().await else {
+        return;
+    };
+    let app = aframp::router(state.clone());
+
+    let (token_a, _) = ensure_merchant(&app, "pr_list_a").await;
+    create_wallet(&app, &token_a).await;
+    let (token_b, _) = ensure_merchant(&app, "pr_list_b").await;
+    create_wallet(&app, &token_b).await;
+
+    for amount in [10_000_000, 20_000_000] {
+        let (status, json) = send(
+            app.clone(),
+            "POST",
+            "/payment-requests",
+            Some(&token_a),
+            Some(json!({ "amount_stroops": amount })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "create failed: {json}");
+    }
+    let (status, json) = send(
+        app.clone(),
+        "POST",
+        "/payment-requests",
+        Some(&token_b),
+        Some(json!({ "amount_stroops": 99_000_000 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create failed: {json}");
+
+    let (status, list_a) = send(app.clone(), "GET", "/payment-requests", Some(&token_a), None).await;
+    assert_eq!(status, StatusCode::OK, "list failed: {list_a}");
+    let rows = list_a.as_array().unwrap();
+    assert_eq!(rows.len(), 2, "merchant A should see only their own two requests");
+    // Newest first.
+    assert_eq!(rows[0]["amount_stroops"], 20_000_000);
+    assert_eq!(rows[1]["amount_stroops"], 10_000_000);
+    assert!(
+        rows.iter().all(|r| r["sep7_uri"].is_string()),
+        "listed XLM requests should each carry a scannable URI"
+    );
+
+    let (status, list_b) = send(app.clone(), "GET", "/payment-requests", Some(&token_b), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let rows_b = list_b.as_array().unwrap();
+    assert_eq!(rows_b.len(), 1, "merchant B must not see merchant A's requests");
+    assert_eq!(rows_b[0]["amount_stroops"], 99_000_000);
+}
+
+#[tokio::test]
+async fn payment_request_list_requires_auth() {
+    let Some(state) = state().await else {
+        return;
+    };
+    let app = aframp::router(state.clone());
+    let (status, _) = send(app.clone(), "GET", "/payment-requests", None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn payment_request_marked_paid_on_memo_correlated_deposit() {
     let Some(state) = state().await else {
         return;

@@ -109,3 +109,46 @@ async fn login_wrong_password_unauthorized() {
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn me_returns_profile_for_a_valid_token() {
+    let Some(app) = app().await else {
+        return;
+    };
+    let email = format!("me+{}@example.com", uuid::Uuid::new_v4().simple());
+
+    let (status, signup) = send(
+        app.clone(),
+        "POST",
+        "/signup",
+        None,
+        Some(json!({ "email": email, "password": "password123", "name": "Me Tester" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "signup failed: {signup}");
+    let token = signup["token"].as_str().unwrap();
+
+    let (status, me) = send(app.clone(), "GET", "/me", Some(token), None).await;
+    assert_eq!(status, StatusCode::OK, "me failed: {me}");
+    assert_eq!(me["email"], email);
+    assert_eq!(me["name"], "Me Tester");
+    assert_eq!(me["user_id"], signup["user_id"]);
+    assert_eq!(me["merchant_id"], signup["merchant_id"]);
+    assert_eq!(me["merchant_name"], "Me Tester");
+    assert!(
+        me.get("password_hash").is_none(),
+        "the password hash must never be serialized to a client"
+    );
+}
+
+#[tokio::test]
+async fn me_requires_a_valid_token() {
+    let Some(app) = app().await else {
+        return;
+    };
+    let (status, _) = send(app.clone(), "GET", "/me", None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, _) = send(app.clone(), "GET", "/me", Some("not-a-real-token"), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}

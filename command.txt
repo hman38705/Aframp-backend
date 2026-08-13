@@ -55,12 +55,25 @@ curl -sS http://127.0.0.1:3000/balance -H "Authorization: Bearer $TOKEN"
 curl -sS http://127.0.0.1:3000/transactions -H "Authorization: Bearer $TOKEN"
 curl -sS "http://127.0.0.1:3000/transactions?limit=10" -H "Authorization: Bearer $TOKEN"
 
-## Payment requests (create requires TOKEN; get is deliberately public)
+## Profile (requires TOKEN)
+curl -sS http://127.0.0.1:3000/me -H "Authorization: Bearer $TOKEN"
+
+## Payment requests (create/list require TOKEN; get-by-id is deliberately public)
 curl -sS -X POST http://127.0.0.1:3000/payment-requests \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"amount_stroops":25000000}'   # defaults to asset=XLM, expires_in_secs=900
 
+curl -sS http://127.0.0.1:3000/payment-requests -H "Authorization: Bearer $TOKEN"
+curl -sS "http://127.0.0.1:3000/payment-requests?limit=10" -H "Authorization: Bearer $TOKEN"
 curl -sS http://127.0.0.1:3000/payment-requests/<id>   # no auth header
+
+## Prove the whole scan-and-pay loop with a real Stellar testnet payment
+## (creates a throwaway merchant + customer, submits a real memo-tagged tx,
+##  polls until the request flips to paid)
+cargo run --example prove_payment_loop
+
+## Validate the OpenAPI spec / check it still matches the router
+python3 -c "import yaml;yaml.safe_load(open('openapi.yaml'));print('openapi.yaml parses OK')"
 
 ## Withdrawals (requires TOKEN)
 ## amount_stroops must be a whole multiple of 100,000 (1 kobo) and asset must be cNGN.

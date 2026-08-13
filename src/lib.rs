@@ -46,6 +46,7 @@ pub fn router(state: AppState) -> axum::Router {
         )
         .route("/signup", axum::routing::post(api::auth::signup))
         .route("/login", axum::routing::post(api::auth::login))
+        .route("/me", axum::routing::get(api::me::get))
         .route("/wallet/create", axum::routing::post(api::wallets::create))
         .route("/wallet", axum::routing::get(api::wallets::get))
         .route("/balance", axum::routing::get(api::balances::get))
@@ -54,7 +55,8 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/withdrawals", axum::routing::get(api::withdrawals::list))
         .route(
             "/payment-requests",
-            axum::routing::post(api::payment_requests::create),
+            axum::routing::post(api::payment_requests::create)
+                .get(api::payment_requests::list),
         )
         .route(
             "/payment-requests/{id}",

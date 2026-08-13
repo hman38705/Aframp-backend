@@ -57,6 +57,46 @@ pub async fn create_payment_request(
     .map_err(PaymentRequestError::from)
 }
 
+/// A payment request joined with its wallet's address, so listing many doesn't
+/// fan out into one wallet lookup per row.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct PaymentRequestWithWallet {
+    pub id: Uuid,
+    pub merchant_id: Uuid,
+    pub wallet_id: Uuid,
+    pub amount_stroops: i64,
+    pub asset: String,
+    pub memo: String,
+    pub status: String,
+    pub payment_id: Option<Uuid>,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub address: String,
+    pub network: String,
+}
+
+pub async fn payment_requests_by_merchant(
+    db: &PgPool,
+    merchant_id: Uuid,
+    limit: i64,
+) -> Result<Vec<PaymentRequestWithWallet>, sqlx::Error> {
+    sqlx::query_as::<_, PaymentRequestWithWallet>(
+        "SELECT pr.id, pr.merchant_id, pr.wallet_id, pr.amount_stroops, pr.asset, pr.memo,
+                pr.status, pr.payment_id, pr.expires_at, pr.created_at, pr.updated_at,
+                w.address, w.network
+           FROM payment_requests pr
+           JOIN wallets w ON w.id = pr.wallet_id
+          WHERE pr.merchant_id = $1
+          ORDER BY pr.created_at DESC
+          LIMIT $2",
+    )
+    .bind(merchant_id)
+    .bind(limit)
+    .fetch_all(db)
+    .await
+}
+
 pub async fn payment_request_by_id(db: &PgPool, id: Uuid) -> Result<Option<PaymentRequest>, sqlx::Error> {
     sqlx::query_as::<_, PaymentRequest>(
         "SELECT id, merchant_id, wallet_id, amount_stroops, asset, memo, status, payment_id,

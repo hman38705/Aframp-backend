@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -77,12 +77,39 @@ pub async fn get(
     Ok(Json(to_view(&pr, &wallet.address, &wallet.network)))
 }
 
-fn to_view(pr: &PaymentRequest, address: &str, network: &str) -> PaymentRequestView {
-    let status = if pr.status == "pending" && pr.expires_at < Utc::now() {
+pub async fn list(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<ListParams>,
+) -> ApiResult<Json<Vec<PaymentRequestView>>> {
+    let merchant_id = auth
+        .merchant_id
+        .ok_or_else(|| bad_request("no merchant associated with this account"))?;
+    let limit = params.limit.unwrap_or(50).clamp(1, 200);
+
+    let rows = payment_requests::payment_requests_by_merchant(&state.db, merchant_id, limit)
+        .await
+        .map_err(internal)?;
+
+    Ok(Json(rows.iter().map(row_to_view).collect()))
+}
+
+#[derive(serde::Deserialize)]
+pub struct ListParams {
+    pub limit: Option<i64>,
+}
+
+/// A `pending` row whose expiry has passed is reported as `expired` at read
+/// time, so a request going stale needs no background job to flip it.
+fn effective_status(status: &str, expires_at: DateTime<Utc>) -> String {
+    if status == "pending" && expires_at < Utc::now() {
         "expired".to_string()
     } else {
-        pr.status.clone()
-    };
+        status.to_string()
+    }
+}
+
+fn to_view(pr: &PaymentRequest, address: &str, network: &str) -> PaymentRequestView {
     PaymentRequestView {
         id: pr.id,
         merchant_id: pr.merchant_id,
@@ -91,10 +118,26 @@ fn to_view(pr: &PaymentRequest, address: &str, network: &str) -> PaymentRequestV
         amount_stroops: pr.amount_stroops,
         asset: pr.asset.clone(),
         memo: pr.memo.clone(),
-        status,
+        status: effective_status(&pr.status, pr.expires_at),
         expires_at: pr.expires_at,
         created_at: pr.created_at,
         sep7_uri: build_sep7_uri(address, pr.amount_stroops, &pr.asset, &pr.memo),
+    }
+}
+
+fn row_to_view(row: &payment_requests::PaymentRequestWithWallet) -> PaymentRequestView {
+    PaymentRequestView {
+        id: row.id,
+        merchant_id: row.merchant_id,
+        address: row.address.clone(),
+        network: row.network.clone(),
+        amount_stroops: row.amount_stroops,
+        asset: row.asset.clone(),
+        memo: row.memo.clone(),
+        status: effective_status(&row.status, row.expires_at),
+        expires_at: row.expires_at,
+        created_at: row.created_at,
+        sep7_uri: build_sep7_uri(&row.address, row.amount_stroops, &row.asset, &row.memo),
     }
 }
 
