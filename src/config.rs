@@ -11,6 +11,9 @@ pub struct AppConfig {
     pub stellar_poll_interval_secs: u64,
     pub wallet_encryption_key: Arc<String>,
     pub paystack_secret_key: Arc<String>,
+    /// Browser origins allowed to call this API. The merchant frontend is a
+    /// separate origin, so without this every request fails CORS preflight.
+    pub cors_allowed_origins: Vec<String>,
 }
 
 impl AppConfig {
@@ -29,6 +32,12 @@ impl AppConfig {
                 .unwrap_or(60),
             wallet_encryption_key: Arc::new(env("WALLET_ENCRYPTION_KEY")?),
             paystack_secret_key: Arc::new(env("PAYSTACK_SECRET_KEY")?),
+            cors_allowed_origins: std::env::var("CORS_ALLOWED_ORIGINS")
+                .unwrap_or_else(|_| "http://localhost:3001".into())
+                .split(',')
+                .map(|origin| origin.trim().to_string())
+                .filter(|origin| !origin.is_empty())
+                .collect(),
         })
     }
 }
