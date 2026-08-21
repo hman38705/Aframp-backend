@@ -39,6 +39,10 @@ pub async fn state() -> Option<AppState> {
         webhook_secret: Arc::new("integration-test-webhook".into()),
         wallet_encryption_key: Arc::new([7u8; 32]),
         payment_provider: Arc::new(aframp::payments::mock::MockProvider),
+        cookie: aframp::CookieConfig {
+            secure: true,
+            same_site: aframp::SameSite::Lax,
+        },
     })
 }
 
@@ -68,6 +72,43 @@ pub async fn send(
         .unwrap();
     let json = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     (status, json)
+}
+
+/// Like [`send`], but authenticates with a `Cookie` header the way a browser
+/// does and hands back the response's `Set-Cookie` values.
+pub async fn send_with_cookie(
+    app: Router,
+    method: &str,
+    uri: &str,
+    cookie: Option<&str>,
+    body: Option<Value>,
+) -> (StatusCode, Value, Vec<String>) {
+    let mut builder = Request::builder().method(method).uri(uri);
+    if let Some(cookie) = cookie {
+        builder = builder.header("cookie", cookie);
+    }
+    let request = builder
+        .header("content-type", "application/json")
+        .body(match body {
+            Some(json) => Body::from(serde_json::to_vec(&json).unwrap()),
+            None => Body::empty(),
+        })
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    let status = response.status();
+    let set_cookie = response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .map(str::to_string)
+        .collect();
+    let bytes = axum::body::to_bytes(response.into_body(), 8 * 1024 * 1024)
+        .await
+        .unwrap();
+    let json = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, json, set_cookie)
 }
 
 pub async fn ensure_merchant(app: &Router, seed: &str) -> (String, String) {

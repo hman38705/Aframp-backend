@@ -10,13 +10,31 @@ Everything documented here is implemented and covered by integration tests again
 
 ## Authentication
 
-Sign up or log in, then send the returned JWT on every authenticated request:
+There are two ways to authenticate. **Browsers should use the cookie.**
+
+### Session cookie (browsers)
+
+`/signup` and `/login` set an `HttpOnly` session cookie:
+
+```
+Set-Cookie: aframp_session=<jwt>; HttpOnly; Path=/; SameSite=Lax; Max-Age=86400; Secure
+```
+
+Send subsequent requests with `credentials: 'include'` (or nothing at all if the frontend is served same-origin) and the browser attaches it for you. `POST /logout` clears it.
+
+**Do not store the JWT in `localStorage`.** The token is still echoed in the response body for API clients, but a browser that copies it into `localStorage` hands the whole session to any XSS on the page — which is exactly what the `HttpOnly` cookie exists to prevent. Ignore the `token` field; read the login response only for `user_id` and `merchant_id`.
+
+### Bearer token (API clients, scripts, tests)
+
+Non-browser clients send the JWT from the response body as a header:
 
 ```
 Authorization: Bearer <token>
 ```
 
-Tokens are **HS256, valid for 24 hours**. Claims are `sub` (user id), `merchant_id`, `iat`, `exp`.
+The header takes precedence when both are present.
+
+Tokens are **HS256, valid for 24 hours** either way. Claims are `sub` (user id), `merchant_id`, `iat`, `exp`.
 
 Two things worth building for up front:
 
@@ -25,7 +43,9 @@ Two things worth building for up front:
 
 ### CORS
 
-Browser origins must be allowlisted server-side via the `CORS_ALLOWED_ORIGINS` env var (comma-separated, defaults to `http://localhost:3001`). Allowed methods are `GET`/`POST`; allowed headers are `Authorization` and `Content-Type`. Credentials are **not** enabled — auth travels as a bearer header, so don't rely on cookies. If your dev server runs on a port other than 3001, that origin has to be added or every request fails preflight.
+Browser origins must be allowlisted server-side via the `CORS_ALLOWED_ORIGINS` env var (comma-separated, defaults to `http://localhost:3001`). Allowed methods are `GET`/`POST`; allowed headers are `Authorization` and `Content-Type`. Credentials **are** enabled, so the origin list is never mirrored back — an origin that isn't listed fails preflight.
+
+The supported deployment is **same-origin**: serve the frontend and this API behind one hostname (the reverse proxy routes `/api/*` here) and CORS stops applying at all. Cross-origin cookie auth additionally needs `COOKIE_SAME_SITE=none`, which lets the session ride cross-site requests and reintroduces CSRF as something you have to handle. With the default `SameSite=Lax`, a cross-origin frontend won't get the cookie sent at all and has to fall back to the bearer header.
 
 ---
 
@@ -101,6 +121,11 @@ No auth. Same response shape as signup.
 ```
 
 Errors: `401` for both a wrong password and an unknown email — deliberately indistinguishable, so don't build a "no such account" message from it.
+
+### `POST /logout`
+No auth — a browser holding an expired or malformed session still needs to clear it. Returns `204` and a `Set-Cookie` that expires `aframp_session` immediately.
+
+Note this clears the browser's session, it does not revoke the JWT: a token already copied elsewhere stays valid until it expires. There's no server-side revocation list yet.
 
 ### `GET /me`
 Auth required. The signed-in user's profile. The JWT carries only ids, so call this after a reload to render anything human-readable without forcing a re-login.
@@ -338,6 +363,8 @@ Worth knowing before you design around them:
 
 - **No websockets / SSE.** Payment status is poll-only.
 - **No refresh tokens.** A 24h expiry means a re-login, not a silent refresh.
+- **No token revocation.** `POST /logout` clears the browser's cookie; it cannot invalidate a JWT that has already been copied somewhere else.
+- **No rate limiting on `/login`.** Nothing throttles password guessing yet.
 - **No cursor pagination.** `limit` only, capped at 200.
 - **No cancel/delete on payment requests.** They can only expire naturally.
 - **No `PATCH`/`DELETE` anywhere** — and CORS only allows `GET`/`POST`, so adding one needs a server change too.

@@ -27,8 +27,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     tokio::spawn(listener);
 
-    // Auth travels as a bearer header, not a cookie, so credentials stay off —
-    // origins are still listed explicitly rather than mirrored back.
+    // Auth travels as an HttpOnly cookie for browsers, so credentials are on —
+    // which means origins must be listed explicitly, never mirrored back.
     let origins = config
         .cors_allowed_origins
         .iter()
@@ -36,8 +36,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect::<Result<Vec<_>, _>>()?;
     tracing::info!(?origins, "cors allowed origins");
 
+    if config.cookie.same_site == aframp::SameSite::None {
+        tracing::warn!(
+            "COOKIE_SAME_SITE=none sends the session on cross-site requests; \
+             serve the frontend same-origin instead if you can, or add CSRF tokens"
+        );
+    }
+
     let cors = CorsLayer::new()
         .allow_origin(origins)
+        .allow_credentials(true)
         .allow_methods([Method::GET, Method::POST])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
 

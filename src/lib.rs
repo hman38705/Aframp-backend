@@ -7,6 +7,7 @@ mod models;
 pub mod payments;
 pub mod services;
 
+pub use auth::cookie::{CookieConfig, SameSite};
 pub use config::AppConfig;
 
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -18,6 +19,7 @@ pub struct AppState {
     pub webhook_secret: std::sync::Arc<String>,
     pub wallet_encryption_key: std::sync::Arc<[u8; 32]>,
     pub payment_provider: std::sync::Arc<dyn payments::PaymentProvider>,
+    pub cookie: CookieConfig,
 }
 
 pub async fn build_state(config: &AppConfig) -> Result<AppState, Box<dyn std::error::Error>> {
@@ -34,6 +36,7 @@ pub async fn build_state(config: &AppConfig) -> Result<AppState, Box<dyn std::er
         payment_provider: std::sync::Arc::new(payments::paystack::PaystackProvider::new(
             (*config.paystack_secret_key).clone(),
         )),
+        cookie: config.cookie,
     })
 }
 
@@ -46,6 +49,7 @@ pub fn router(state: AppState) -> axum::Router {
         )
         .route("/signup", axum::routing::post(api::auth::signup))
         .route("/login", axum::routing::post(api::auth::login))
+        .route("/logout", axum::routing::post(api::auth::logout))
         .route("/me", axum::routing::get(api::me::get))
         .route("/wallet/create", axum::routing::post(api::wallets::create))
         .route("/wallet", axum::routing::get(api::wallets::get))

@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use crate::auth::cookie::{CookieConfig, SameSite};
+
 #[derive(Clone)]
 pub struct AppConfig {
     pub database_url: String,
@@ -14,10 +16,29 @@ pub struct AppConfig {
     /// Browser origins allowed to call this API. The merchant frontend is a
     /// separate origin, so without this every request fails CORS preflight.
     pub cors_allowed_origins: Vec<String>,
+    /// How the session cookie is stamped. Defaults are the deployed ones:
+    /// `Secure` on, `SameSite=Lax`. Browsers treat localhost as a secure
+    /// context, so the defaults also work for local development over HTTP.
+    pub cookie: CookieConfig,
 }
 
 impl AppConfig {
     pub fn from_env() -> Result<Self, String> {
+        let cookie_secure = flag("COOKIE_SECURE", true)?;
+        let cookie_same_site = match std::env::var("COOKIE_SAME_SITE")
+            .unwrap_or_else(|_| "lax".into())
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "lax" => SameSite::Lax,
+            "none" => SameSite::None,
+            other => return Err(format!("COOKIE_SAME_SITE must be `lax` or `none`, got `{other}`")),
+        };
+        if cookie_same_site == SameSite::None && !cookie_secure {
+            return Err("COOKIE_SAME_SITE=none requires COOKIE_SECURE=true; browsers reject a SameSite=None cookie that is not Secure".into());
+        }
+
         Ok(Self {
             database_url: env("DATABASE_URL")?,
             bind_addr: std::env::var("APP_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".into()),
@@ -38,10 +59,25 @@ impl AppConfig {
                 .map(|origin| origin.trim().to_string())
                 .filter(|origin| !origin.is_empty())
                 .collect(),
+            cookie: CookieConfig {
+                secure: cookie_secure,
+                same_site: cookie_same_site,
+            },
         })
     }
 }
 
 fn env(name: &str) -> Result<String, String> {
     std::env::var(name).map_err(|_| format!("{name} is required"))
+}
+
+fn flag(name: &str, default: bool) -> Result<bool, String> {
+    match std::env::var(name) {
+        Err(_) => Ok(default),
+        Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" => Ok(true),
+            "0" | "false" | "no" => Ok(false),
+            other => Err(format!("{name} must be true or false, got `{other}`")),
+        },
+    }
 }

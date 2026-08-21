@@ -3,7 +3,7 @@ use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::Json;
 
-use crate::auth::jwt;
+use crate::auth::{cookie, jwt};
 use crate::error::ApiError;
 use crate::AppState;
 
@@ -20,14 +20,15 @@ impl FromRequestParts<AppState> for AuthUser {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let header = parts
+        // API clients send a bearer token; browsers send the HttpOnly session
+        // cookie, which JS on the page cannot read. Either proves the session.
+        let token = parts
             .headers
             .get("authorization")
             .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(ApiError { error: "missing Authorization header".into() })))?;
-        let token = header
-            .strip_prefix("Bearer ")
-            .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(ApiError { error: "invalid Authorization header".into() })))?;
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .or_else(|| cookie::from_headers(&parts.headers))
+            .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(ApiError { error: "missing session cookie or bearer token".into() })))?;
         let claims = jwt::verify(&state.jwt_secret, token)
             .map_err(|_| (StatusCode::UNAUTHORIZED, Json(ApiError { error: "invalid or expired token".into() })))?;
         Ok(AuthUser {

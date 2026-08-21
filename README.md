@@ -53,6 +53,9 @@ This section is deliberately literal: everything marked ✅ has been exercised e
 | Real payout funding ("Stage A") | Paystack Transfers are wired and code-correct (see above), but Paystack's own business-account balance is ₦0 — `source: "balance"` transfers have nothing to draw from. Confirmed live: a real bank account + valid amount still failed with *"Your balance is not enough to fulfil this request."* Nothing pays out until there's a real crypto→fiat funding pipeline (e.g. cNGN issuer redemption) |
 | Confirmation-depth threshold | Deposits move `detected → verified → confirmed` immediately on detection — there's no real "wait N ledger confirmations" logic yet (Stellar has fast finality, so this matters less than on Bitcoin, but it's still an open TODO in `blockchain/worker.rs`) |
 | Settlement/sweep wallet | Each merchant's Stellar secret is held (encrypted) by the platform, but nothing yet sweeps funds from individual merchant wallets into a platform settlement wallet. `STELLAR_SYSTEM_WALLET_ADDRESS` is still validated at startup and reserved for this, but isn't used by anything yet |
+| TLS | The server speaks plain HTTP by design and must run behind a TLS-terminating reverse proxy. Deployed without one, passwords cross the network in cleartext and no amount of hashing helps — the attacker sees the password before it is hashed. See [Deploying behind TLS](#deploying-behind-tls) |
+| Login rate limiting | Nothing throttles password guessing against `/login` yet |
+| Token revocation | `POST /logout` clears the browser cookie, but a JWT already copied elsewhere stays valid for its full 24h. No revocation list, no refresh rotation |
 | `src/stellar/mod.rs` | Vestigial stub from an earlier, abandoned design (single system wallet + memo-based correlation). Not compiled into the binary's active module tree in any meaningful way, superseded by the per-wallet design in `src/blockchain/`. Left in place as known cleanup debt rather than silently deleted. |
 
 See **[`PRD.md`](PRD.md)** for the full open-decisions list (payout provider choice, cNGN issuer sourcing, confirmation policy) and roadmap.
@@ -103,6 +106,9 @@ Fill in `.env`:
 | `STELLAR_HORIZON_URL` | no | `https://horizon-testnet.stellar.org` | Horizon endpoint to poll |
 | `STELLAR_POLL_INTERVAL_SECS` | no | `60` | How often the deposit-detection worker polls Horizon, per wallet |
 | `PAYSTACK_SECRET_KEY` | yes | — | Paystack Dashboard → Settings → API Keys & Webhooks. `sk_test_...` for dev, `sk_live_...` only once the business is verified/activated for Transfers (see `PRD.md` §9.1) |
+| `CORS_ALLOWED_ORIGINS` | no | `http://localhost:3001` | Comma-separated browser origins allowed to call the API. Never mirrored back — an unlisted origin fails preflight |
+| `COOKIE_SECURE` | no | `true` | Whether the session cookie carries `Secure`. Leave on: browsers treat `localhost` as a secure context, so the default works in dev too. Only turn it off for a non-localhost plain-HTTP setup, which you should not have |
+| `COOKIE_SAME_SITE` | no | `lax` | `lax` or `none`. `none` (which forces `Secure`) is only for a frontend on a different origin, and lets the session ride cross-site requests — prefer serving the frontend same-origin |
 
 ### Quick start (Docker Postgres)
 
@@ -132,6 +138,35 @@ The server starts on `APP_BIND_ADDR` (default `http://127.0.0.1:3000`) and spawn
 
 See **[`command.txt`](command.txt)** for a copy-paste reference of every command used to run, test, and interact with this backend — curl calls for every endpoint, secret generation, and DB lifecycle commands.
 
+### Cloudflare Containers
+
+This repository includes a Cloudflare Container deployment scaffold. It runs the existing Axum binary in a single named container, with a Worker acting as the public HTTPS proxy. The single instance is intentional: multiple instances would each run the Stellar polling loop and duplicate work.
+
+Before deploying:
+
+1. In [`wrangler.jsonc`](wrangler.jsonc), replace `CORS_ALLOWED_ORIGINS` with the exact HTTPS origin of the frontend. If the frontend is on another origin, set `COOKIE_SAME_SITE` to `none`; it requires the existing `COOKIE_SECURE=true` setting.
+2. Store each required value as a Cloudflare Worker secret. Do not copy `.env` into source control or `wrangler.jsonc`:
+
+   ```bash
+   npx wrangler secret put DATABASE_URL
+   npx wrangler secret put JWT_SECRET
+   npx wrangler secret put WEBHOOK_SECRET
+   npx wrangler secret put WALLET_ENCRYPTION_KEY
+   npx wrangler secret put STELLAR_SYSTEM_WALLET_ADDRESS
+   npx wrangler secret put PAYSTACK_SECRET_KEY
+   ```
+
+3. Run the SQL migrations against the production database, then deploy:
+
+   ```bash
+   cargo install sqlx-cli --no-default-features --features rustls,postgres
+   sqlx migrate run
+   npm install
+   npx wrangler deploy
+   ```
+
+The Worker has a five-minute Cron Trigger that calls `/health`. This keeps the container awake so its 60-second Stellar polling loop continues when there is no API traffic. Cloudflare may take several minutes to provision the first container after deployment.
+
 ### Running tests
 
 Integration tests need a separate database, and **silently skip with a false "ok" if it isn't configured** — this bit us during development (a full green `cargo test` run had actually tested nothing). Always set `TEST_DATABASE_URL` before trusting the result:
@@ -147,12 +182,13 @@ TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/aframp_test cargo 
 
 The table below is a quick index.
 
-All authenticated routes expect `Authorization: Bearer <token>`, where `<token>` is the JWT returned from `/signup` or `/login`.
+Authenticated routes accept either the `aframp_session` HttpOnly cookie (set by `/signup` and `/login` — what browsers should use) or `Authorization: Bearer <token>` with the JWT from the same responses (for scripts and API clients). See [`API.md`](API.md#authentication).
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `POST` | `/signup` | — | Create a user + merchant account. Body: `{ email, password (min 8 chars), name }` |
 | `POST` | `/login` | — | Authenticate. Body: `{ email, password }` |
+| `POST` | `/logout` | — | Expire the session cookie. Ends the browser session; does not revoke the JWT |
 | `GET` | `/me` | ✅ | Current user + merchant profile. The JWT carries only ids, so a reloaded frontend needs this to render identity |
 | `POST` | `/wallet/create` | ✅ | Generate a real Stellar wallet for the authenticated merchant. Body: `{ network? }` (defaults to `stellar`) |
 | `GET` | `/wallet` | ✅ | Get the merchant's wallet |
@@ -170,6 +206,35 @@ All authenticated routes expect `Authorization: Bearer <token>`, where `<token>`
 ```json
 { "token": "...", "user_id": "...", "merchant_id": "..." }
 ```
+
+…alongside a `Set-Cookie: aframp_session=<jwt>; HttpOnly; Path=/; SameSite=Lax; Max-Age=86400; Secure`. A browser frontend should use the cookie and ignore the `token` field — copying it into `localStorage` puts the session within reach of any XSS on the page.
+
+## Deploying behind TLS
+
+The server intentionally does not terminate TLS. It binds to `127.0.0.1:3000` by default and expects a reverse proxy in front of it — which is also what makes the `Secure` session cookie meaningful, since browsers won't send a `Secure` cookie over plain HTTP to a non-localhost host.
+
+Serve the frontend and the API from **one origin**. Then browser requests are same-origin, CORS stops applying entirely, and the `SameSite=Lax` cookie works without the cross-site relaxation that reintroduces CSRF. A minimal Caddy config:
+
+```caddyfile
+pay.example.com {
+    encode gzip
+    header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+    handle /api/* {
+        uri strip_prefix /api
+        reverse_proxy 127.0.0.1:3000
+    }
+    handle {
+        root * /srv/aframp-frontend
+        try_files {path} /index.html
+        file_server
+    }
+}
+```
+
+Caddy provisions and renews the certificate itself. With this, the frontend calls `/api/me` as a relative path, sends no `Authorization` header, and never touches the token.
+
+If the frontend genuinely must live on a separate origin, set `CORS_ALLOWED_ORIGINS` to it and `COOKIE_SAME_SITE=none` — and understand that you have then opted into cross-site cookie sending and need to think about CSRF. (Today's saving grace is that every mutating route uses the JSON extractor, so a cross-site HTML form POST can't reach one; don't rely on that if you add form-encoded endpoints.)
 
 ## Project layout
 

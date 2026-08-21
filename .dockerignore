@@ -1,0 +1,6 @@
+.env
+.git
+.wrangler
+node_modules
+target
+log.txt

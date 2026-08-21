@@ -20,7 +20,9 @@ tags:
   - name: Payment requests
   - name: Money
 
+# Either authenticates. The Authorization header wins when both are sent.
 security:
+  - cookieAuth: []
   - bearerAuth: []
 
 paths:
@@ -49,6 +51,10 @@ paths:
     post:
       tags: [Auth]
       summary: Create a user and merchant
+      description: >
+        Sets the aframp_session HttpOnly cookie and echoes the same JWT in the
+        body for API clients. Browsers should rely on the cookie and ignore the
+        token field — storing it in localStorage exposes the session to XSS.
       security: []
       requestBody:
         required: true
@@ -75,6 +81,7 @@ paths:
       description: >
         Returns 401 for both a wrong password and an unknown email — deliberately
         indistinguishable, so do not derive a "no such account" message from it.
+        Sets the aframp_session HttpOnly cookie on success.
       security: []
       requestBody:
         required: true
@@ -88,6 +95,23 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/AuthResponse' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /logout:
+    post:
+      tags: [Auth]
+      summary: Clear the session cookie
+      description: >
+        Unauthenticated by design — a browser holding an expired or malformed
+        session still needs a way to clear it. This ends the browser session
+        only; it does not revoke a JWT that has been copied elsewhere.
+      security: []
+      responses:
+        '204':
+          description: Session cookie expired
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: aframp_session with Max-Age=0
 
   /me:
     get:
@@ -287,7 +311,17 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: HS256, 24h expiry. No refresh endpoint — a 401 means re-login.
+      description: >
+        HS256, 24h expiry. No refresh endpoint — a 401 means re-login. For API
+        clients and scripts; browsers should use cookieAuth instead.
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: aframp_session
+      description: >
+        HttpOnly session cookie set by /signup and /login, cleared by /logout.
+        The preferred method for browsers — JS cannot read it, so an XSS on the
+        page cannot steal the session. Never copy the token into localStorage.
 
   parameters:
     Limit:
