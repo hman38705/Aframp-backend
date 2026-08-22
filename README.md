@@ -140,7 +140,7 @@ See **[`command.txt`](command.txt)** for a copy-paste reference of every command
 
 ### Cloudflare Containers
 
-This repository includes a Cloudflare Container deployment scaffold. It runs the existing Axum binary in a single named container, with a Worker acting as the public HTTPS proxy. The single instance is intentional: multiple instances would each run the Stellar polling loop and duplicate work.
+This repository includes a Cloudflare Container deployment scaffold. It runs the existing Axum binary in a single named container, with the `aframp-backend` Worker acting as the public HTTPS proxy. The single instance is intentional: multiple instances would each run the Stellar polling loop and duplicate work.
 
 Before deploying:
 
