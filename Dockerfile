@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM rust:1.86-bookworm AS builder
+FROM rust:1.88-bookworm AS builder
 WORKDIR /app
 
 # Copy manifests first so dependency compilation can be cached between builds.
