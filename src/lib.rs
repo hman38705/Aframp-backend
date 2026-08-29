@@ -6,6 +6,7 @@ mod error;
 mod models;
 pub mod payments;
 pub mod services;
+mod validation;
 
 pub use auth::cookie::{CookieConfig, SameSite};
 pub use config::AppConfig;
