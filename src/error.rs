@@ -21,6 +21,10 @@ pub fn not_found(message: &str) -> (StatusCode, Json<ApiError>) {
     error(StatusCode::NOT_FOUND, message)
 }
 
+pub fn unsupported_media_type(message: &str) -> (StatusCode, Json<ApiError>) {
+    error(StatusCode::UNSUPPORTED_MEDIA_TYPE, message)
+}
+
 pub fn unauthorized(message: &str) -> (StatusCode, Json<ApiError>) {
     error(StatusCode::UNAUTHORIZED, message)
 }
